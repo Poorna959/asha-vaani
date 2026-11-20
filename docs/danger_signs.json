@@ -1,0 +1,247 @@
+{
+  "version": "1.0",
+  "name": "NHM ASHA Maternal and Newborn Danger-Sign List",
+  "disclaimer": "Emergency referral criteria only. Not intended for diagnosis or treatment.",
+  "danger_signs": [
+    {
+      "code": "DS_MAT_BLEEDING",
+      "category": "MATERNAL_ANC",
+      "canonical_name": "Vaginal bleeding during pregnancy",
+      "priority": "IMMEDIATE_EMERGENCY",
+      "referral_advice": {
+        "en": "Emergency: Vaginal bleeding detected. Immediate referral to PHC or District Hospital required. Do not give any medication.",
+        "hi": "आपातकालीन: गर्भावस्था में रक्तस्राव का संकेत मिला है। तुरंत पीएचसी (PHC) या जिला अस्पताल रेफर करें। कोई दवाई न दें।",
+        "kn": "ತುರ್ತು ಪರಿಸ್ಥಿತಿ: ಗರ್ಭಾವಸ್ಥೆಯಲ್ಲಿ ರಕ್ತಸ್ರಾವ ಕಂಡುಬಂದಿದೆ. ತಕ್ಷಣ ಪ್ರಾಥಮಿಕ ಆರೋಗ್ಯ ಕೇಂದ್ರಕ್ಕೆ (PHC) ಕರೆದೊಯ್ಯಿರಿ.",
+        "ta": "அவசரம்: கர்ப்ப காலத்தில் ரத்தப்போக்கு உள்ளது. உடனடியாக ஆரம்ப சுகாதார நிலையத்திற்கு (PHC) அழைத்துச் செல்லவும்.",
+        "te": "అత్యవసరం: గర్భధారణ సమయంలో రక్తస్రావం కనిపిస్తోంది. వెంటనే పీహెచ్‌సీకి (PHC) తరలించండి."
+      },
+      "keywords": {
+        "en": ["bleeding", "blood loss", "spotting blood", "hemorrhage", "vaginal bleed"],
+        "hi": ["रक्तस्राव", "खून बहना", "खून आ रहा", "bliding", "khoon nikalna", "khoon"],
+        "kn": ["ರಕ್ತಸ್ರಾವ", "ರಕ್ತ ಬರುತ್ತಿದೆ", "rakthasrava", "raktha hogthide"],
+        "ta": ["ரத்தப்போக்கு", "ரத்தம்", "rathapokku", "rathom"],
+        "te": ["రక్తస్రావం", "రక్తం కారుతోంది", "rakthasravam", "raktham"]
+      }
+    },
+    {
+      "code": "DS_MAT_CONVULSIONS",
+      "category": "MATERNAL_ANC",
+      "canonical_name": "Convulsions, fits, or seizures (Eclampsia warning)",
+      "priority": "IMMEDIATE_EMERGENCY",
+      "referral_advice": {
+        "en": "Emergency: Convulsions or fits detected. Call 108 ambulance immediately for urgent PHC transfer.",
+        "hi": "आपातकालीन: दौरे या मिर्गी के लक्षण हैं। तुरंत 108 एम्बुलेंस बुलाकर अस्पताल ले जाएं।",
+        "kn": "ತುರ್ತು ಪರಿಸ್ಥಿತಿ: ಫಿಟ್ಸ್ ಅಥವಾ ಮೂರ್ಛೆ ಬಂದಿದೆ. ತಕ್ಷಣ 108 ಆಂಬ್ಯುಲೆನ್ಸ್ ಕರೆಸಿ ಆಸ್ಪತ್ರೆಗೆ ಕಳುಹಿಸಿ.",
+        "ta": "அவசரம்: வலிப்பு அல்லது மயக்கம் வந்துள்ளது. உடனடியாக 108 ஆம்புலன்ஸை அழைக்கவும்.",
+        "te": "అత్యవసరం: ఫిట్స్ లేదా మూర్ఛ లక్షణాలు ఉన్నాయి. వెంటనే 108 అంబులెన్స్‌ని పిలవండి."
+      },
+      "keywords": {
+        "en": ["convulsion", "convulsions", "fits", "seizure", "seizures", "fit aa raha"],
+        "hi": ["दौरे", "मिर्गी", "फिट्स", "jhatke aana", "fit"],
+        "kn": ["ಫಿಟ್ಸ್", "ಮೂರ್ಛೆ", "ಸೆಳೆತ", "fits", "moorche"],
+        "ta": ["வலிப்பு", "valippu", "seizure"],
+        "te": ["ఫిట్స్", "మూర్ఛ", "fits", "moorcha"]
+      }
+    },
+    {
+      "code": "DS_MAT_HEADACHE_VISION",
+      "category": "MATERNAL_ANC",
+      "canonical_name": "Severe persistent headache with blurred vision (Pre-eclampsia sign)",
+      "priority": "HIGH",
+      "referral_advice": {
+        "en": "High risk: Severe headache with blurred vision. Refer to PHC for urgent BP and urine check.",
+        "hi": "गंभीर लक्षण: तेज सिरदर्द और धुंधला दिखना। बीपी जांच के लिए तुरंत पीएचसी भेजें।",
+        "kn": "ತೀವ್ರ ಲಕ್ಷಣ: ತೀವ್ರ ತಲೆನೋವು ಮತ್ತು ಕಣ್ಣು ಮಂಜಾಗುವುದು. ಬಿಪಿ ಪರೀಕ್ಷೆಗೆ ತಕ್ಷಣ PHC ಗೆ ಕಳುಹಿಸಿ.",
+        "ta": "கடுமையான அறிகுறி: கடுமையான தலைவலி மற்றும் பார்வை மங்குதல். உடனடியாக PHC க்கு அனுப்பவும்.",
+        "te": "తీవ్ర లక్షణం: తీవ్ర తలనొప్పి మరియు కంటిచూపు మందగించడం. వెంటనే PHC కి పంపండి."
+      },
+      "keywords": {
+        "en": ["severe headache", "blurred vision", "blur vision", "double vision", "tez sirdard"],
+        "hi": ["तेज सिरदर्द", "धुंधला दिखना", "dhundhla", "sir phat raha", "sir dard tez"],
+        "kn": ["ತೀವ್ರ ತಲೆನೋವು", "ಕಣ್ಣು ಮಂಜಾಗುವುದು", "tale novu", "kannu manju"],
+        "ta": ["கடுமையான தலைவலி", "பார்வை மங்கல்", "thalai vali"],
+        "te": ["తీవ్ర తలనొప్పి", "కళ్ళు మసకబారడం", "talanopi", "kallu masaka"]
+      }
+    },
+    {
+      "code": "DS_MAT_HIGH_FEVER",
+      "category": "MATERNAL_ANC",
+      "canonical_name": "High fever during pregnancy",
+      "priority": "HIGH",
+      "referral_advice": {
+        "en": "High risk: High fever detected. Refer to PHC for clinical evaluation. Do not prescribe drugs.",
+        "hi": "उच्च जोखिम: तेज बुखार है। जांच के लिए पीएचसी रेफर करें। कोई दवाई न दें।",
+        "kn": "ಹೆಚ್ಚಿನ ಅಪಾಯ: ತೀವ್ರ ಜ್ವರ ಕಾಣಿಸಿಕೊಂಡಿದೆ. ತಪಾಸಣೆಗೆ PHC ಗೆ ಕಳುಹಿಸಿ.",
+        "ta": "அதிக ஆபத்து: கடுமையான காய்ச்சல் உள்ளது. பரிசோதனைக்காக PHC க்கு அனுப்பவும்.",
+        "te": "అధిక ప్రమాదం: తీవ్ర జ్వరం ఉంది. పరీక్ష కోసం PHC కి పంపండి."
+      },
+      "keywords": {
+        "en": ["high fever", "severe fever", "tez bukhar", "heavy fever"],
+        "hi": ["तेज बुखार", "बुखार तेज", "tez bukhar", "bahut bukhar", "taptap"],
+        "kn": ["ತೀವ್ರ ಜ್ವರ", "ಹೆಚ್ಚು ಜ್ವರ", "teevra jwara", "tumba jwara"],
+        "ta": ["அதிக காய்ச்சல்", "கடுமையான காய்ச்சல்", "athiga kaichal"],
+        "te": ["తీవ్ర జ్వరం", "ఎక్కువ జ్వరం", "teevra jwaram", "ekkuva jwaram"]
+      }
+    },
+    {
+      "code": "DS_MAT_NO_FETAL_MOVEMENT",
+      "category": "MATERNAL_ANC",
+      "canonical_name": "Reduced or absent fetal movements",
+      "priority": "IMMEDIATE_EMERGENCY",
+      "referral_advice": {
+        "en": "Emergency: Reduced or absent baby movement. Immediate PHC/hospital ultrasound & fetal monitoring required.",
+        "hi": "आपातकालीन: बच्चे की हलचल कम या बंद है। तुरंत अस्पताल में सोनोग्राफी के लिए रेफर करें।",
+        "kn": "ತುರ್ತು ಪರಿಸ್ಥಿತಿ: ಮಗುವಿನ ಚಲನವಲನ ಕಡಿಮೆಯಾಗಿದೆ ಅಥವಾ ನಿಂತಿದೆ. ತಕ್ಷಣ ಆಸ್ಪತ್ರೆಗೆ ಕಳುಹಿಸಿ.",
+        "ta": "அவசரம்: குழந்தையின் அசைவு குறைந்துள்ளது அல்லது இல்லை. உடனடியாக மருத்துவமனைக்கு அனுப்பவும்.",
+        "te": "అత్యవసరం: కడుపులో బిడ్డ కదలికలు తగ్గాయి లేదా ఆగిపోయాయి. వెంటనే ఆసుపత్రికి తరలించండి."
+      },
+      "keywords": {
+        "en": ["no baby movement", "reduced movement", "baby not moving", "halchal band", "no kicking"],
+        "hi": ["बच्चे की हलचल नहीं", "हलचल कम", "bacha hil nahi raha", "no movement"],
+        "kn": ["ಮಗು ಕದಲುತಿಲ್ಲ", "ಚಲನವಲನ ಇಲ್ಲ", "magu kadaluttilla", "chalanavalana illa"],
+        "ta": ["குழந்தை அசையவில்லை", "அசைவு இல்லை", "kuzhandhai asaiyavillai"],
+        "te": ["కదలిక లేదు", "బిడ్డ కదలడం లేదు", "kadilika ledu", "bidda kadaladam ledu"]
+      }
+    },
+    {
+      "code": "DS_MAT_WATER_BREAKING",
+      "category": "MATERNAL_ANC",
+      "canonical_name": "Premature rupture of membranes (water breaking / leaking fluid)",
+      "priority": "IMMEDIATE_EMERGENCY",
+      "referral_advice": {
+        "en": "Emergency: Water breaking or fluid leaking. Immediate transfer to delivery facility required.",
+        "hi": "आपातकालीन: पानी की थैली फटना या पानी बहना। तुरंत प्रसव केंद्र (PHC/FRU) ले जाएं।",
+        "kn": "ತುರ್ತು ಪರಿಸ್ಥಿತಿ: ನೀರಿನ ಚೀಲ ಒಡೆದಿದೆ / ನೀರು ಹೋಗುತ್ತಿದೆ. ತಕ್ಷಣ ಹೆರಿಗೆ ಆಸ್ಪತ್ರೆಗೆ ಕರೆದೊಯ್ಯಿರಿ.",
+        "ta": "அவசரம்: பனிக்குடம் உடைந்தது / நீர் வெளியேறுகிறது. உடனடியாக பிரசவ மையத்திற்கு கொண்டு செல்லவும்.",
+        "te": "అత్యవసరం: ఉమ్మనీరు పోతోంది / నీటి సంచి పగిలింది. వెంటనే డెలివరీ ఆసుపత్రికి తీసుకెళ్లండి."
+      },
+      "keywords": {
+        "en": ["water broke", "water breaking", "leaking fluid", "amniotic fluid", "pani nikal raha"],
+        "hi": ["पानी छूटना", "पानी की थैली", "pani beh raha", "water break"],
+        "kn": ["ನೀರು ಹೋಗುತ್ತಿದೆ", "ನೀರಿನ ಚೀಲ ಒಡೆದಿದೆ", "neeru hoguttide"],
+        "ta": ["பனிக்குடம் உடைந்தது", "நீர் கசிகிறது", "panikudam"],
+        "te": ["ఉమ్మనీరు", "నీరు కారుతోంది", "ummaneeru"]
+      }
+    },
+    {
+      "code": "DS_NB_HIGH_FEVER_COLD",
+      "category": "NEWBORN_HBNC",
+      "canonical_name": "Newborn high fever (>37.5°C) or body cold to touch (hypothermia)",
+      "priority": "IMMEDIATE_EMERGENCY",
+      "referral_advice": {
+        "en": "Emergency: Newborn temperature abnormal (high fever or cold extremities). Refer immediately to SNCU/PHC.",
+        "hi": "आपातकालीन: नवजात को तेज बुखार या शरीर अत्यधिक ठंडा है। तुरंत एसएनसीयू (SNCU)/पीएचसी ले जाएं।",
+        "kn": "ತುರ್ತು ಪರಿಸ್ಥಿತಿ: ಮಗುವಿಗೆ ತೀವ್ರ ಜ್ವರ ಅಥವಾ ಮೈ ತಣ್ಣಗಾಗಿದೆ. ತಕ್ಷಣ SNCU/PHC ಗೆ ಕರೆದೊಯ್ಯಿರಿ.",
+        "ta": "அவசரம்: பிறந்த குழந்தைக்கு அதிக காய்ச்சல் அல்லது உடல் குளிர்ந்துள்ளது. உடனடியாக SNCU/PHC க்கு கொண்டு செல்லவும்.",
+        "te": "అత్యవసరం: నవజాత శిశువుకు తీవ్ర జ్వరం లేదా శరీరం చల్లబడింది. వెంటనే SNCU/PHC కి తీసుకెళ్లండి."
+      },
+      "keywords": {
+        "en": ["newborn fever", "baby fever", "body cold", "hypothermia", "baby temperature high"],
+        "hi": ["बच्चे को बुखार", "नवजात को बुखार", "शरीर ठंडा", "bacha thanda pad gaya", "garam"],
+        "kn": ["ಮಗುವಿಗೆ ಜ್ವರ", "ಮೈ ತಣ್ಣಗಾಗಿದೆ", "maguvige jwara", "mai tannagagide"],
+        "ta": ["குழந்தைக்கு காய்ச்சல்", "உடல் குளிர்ந்துள்ளது", "kuzhandhaikku kaichal"],
+        "te": ["శిశువుకు జ్వరం", "శరీరం చల్లబడింది", "sisuvuku jwaram", "challa badindi"]
+      }
+    },
+    {
+      "code": "DS_NB_FAST_BREATHING",
+      "category": "NEWBORN_HBNC",
+      "canonical_name": "Fast breathing or chest in-drawing in newborn",
+      "priority": "IMMEDIATE_EMERGENCY",
+      "referral_advice": {
+        "en": "Emergency: Newborn fast breathing or chest in-drawing detected. Refer to hospital immediately.",
+        "hi": "आपातकालीन: नवजात की सांस तेज चल रही है या छाती धंस रही है। तुरंत अस्पताल रेफर करें।",
+        "kn": "ತುರ್ತು ಪರಿಸ್ಥಿತಿ: ಮಗು ವೇಗವಾಗಿ ಉಸಿರಾಡುತ್ತಿದೆ ಅಥವಾ ಎದೆ ಕುಸಿಯುತ್ತಿದೆ. ತಕ್ಷಣ ಆಸ್ಪತ್ರೆಗೆ ಕಳುಹಿಸಿ.",
+        "ta": "அவசரம்: குழந்தை வேகமாக மூச்சு விடுகிறது அல்லது மார்பு உள்வாங்குகிறது. உடனே மருத்துவமனைக்கு அனுப்பவும்.",
+        "te": "అత్యవసరం: శిశువు వేగంగా శ్వాస తీసుకుంటోంది లేదా పక్కటెముకలు లోపలికి లాగుతున్నాయి. వెంటనే ఆసుపత్రికి పంపండి."
+      },
+      "keywords": {
+        "en": ["fast breathing", "chest indrawing", "chest in-drawing", "difficulty breathing", "pant", "gasping"],
+        "hi": ["तेज सांस", "छाती धंसना", "saans lene me takleef", "chhati dhasna", "saans tez"],
+        "kn": ["ವೇಗದ ಉಸಿರಾಟ", "ಎದೆ ಕುಸಿಯುತ್ತಿದೆ", "usirata vega", "ede kusiyuttide"],
+        "ta": ["வேகமாக மூச்சு", "மார்பு உள்வாங்குதல்", "moochu viduvathil siramam"],
+        "te": ["వేగంగా శ్వాస", "శ్వాస తీసుకోవడంలో కష్టం", "swasa vegam"]
+      }
+    },
+    {
+      "code": "DS_NB_POOR_FEEDING",
+      "category": "NEWBORN_HBNC",
+      "canonical_name": "Unable to feed or stopped sucking breast milk",
+      "priority": "HIGH",
+      "referral_advice": {
+        "en": "High risk: Newborn unable to feed or stopped sucking. Urgent clinical assessment required at PHC.",
+        "hi": "गंभीर स्थिति: नवजात दूध नहीं पी पा रहा है। तुरंत जांच के लिए पीएचसी ले जाएं।",
+        "kn": "ತೀವ್ರ ಸ್ಥಿತಿ: ಮಗು ಹಾಲು ಕುಡಿಯುತ್ತಿಲ್ಲ ಅಥವಾ ಎದೆಹಾಲು ಹೀರುತ್ತಿಲ್ಲ. ತಕ್ಷಣ PHC ಗೆ ಕರೆದೊಯ್ಯಿರಿ.",
+        "ta": "ஆபத்தான நிலை: குழந்தை தாய்ப்பால் குடிக்க முடியவில்லை. உடனடியாக PHC க்கு அழைத்துச் செல்லவும்.",
+        "te": "ప్రమాదకర పరిస్థితి: శిశువు పాలు తాగలేకపోతోంది. వెంటనే PHC కి తీసుకెళ్లండి."
+      },
+      "keywords": {
+        "en": ["cannot feed", "stopped sucking", "unable to feed", "not drinking milk", "doodh nahi pee raha"],
+        "hi": ["दूध नहीं पी रहा", "स्तनपान नहीं कर रहा", "doodh band", "doodh nahi peeta"],
+        "kn": ["ಹಾಲು ಕುಡಿಯುತ್ತಿಲ್ಲ", "ಹಾಲು ಹೀರುತ್ತಿಲ್ಲ", "haalu kudiyuttilla"],
+        "ta": ["பால் குடிக்கவில்லை", "தாய்ப்பால் குடிக்க மறுக்கிறது", "paal kudikkavillai"],
+        "te": ["పాలు తాగడం లేదు", "పాలు కుదపడం లేదు", "paalu taagadam ledu"]
+      }
+    },
+    {
+      "code": "DS_NB_LETHARGY",
+      "category": "NEWBORN_HBNC",
+      "canonical_name": "Lethargic, floppy, or unconscious newborn",
+      "priority": "IMMEDIATE_EMERGENCY",
+      "referral_advice": {
+        "en": "Emergency: Newborn is unusually lethargic or unresponsive. Urgent emergency hospital transfer required.",
+        "hi": "आपातकालीन: नवजात बहुत सुस्त, बेजान या अचेत है। तुरंत आपातकालीन अस्पताल ले जाएं।",
+        "kn": "ತುರ್ತು ಪರಿಸ್ಥಿತಿ: ಮಗು ತೀರಾ ಸುಸ್ತಾಗಿದೆ ಅಥವಾ ಅರೆಪ್ರಜ್ಞಾವಸ್ಥೆಯಲ್ಲಿದೆ. ತಕ್ಷಣ ಆಸ್ಪತ್ರೆಗೆ ಕಳುಹಿಸಿ.",
+        "ta": "அவசரம்: குழந்தை மிகவும் சோர்வாக அல்லது சுயநினைவின்றி உள்ளது. அவசரமாக மருத்துவமனைக்கு அழைத்துச் செல்லவும்.",
+        "te": "అత్యవసరం: శిశువు తీవ్ర మత్తులో లేదా అచేతనంగా ఉంది. వెంటనే అత్యవసర ఆసుపత్రికి తరలించండి."
+      },
+      "keywords": {
+        "en": ["lethargic", "unconscious", "floppy baby", "unresponsive", "very weak baby", "sust bacha"],
+        "hi": ["सुस्त बच्चा", "बेहोश", "हलचल नहीं", "sust", "bejan"],
+        "kn": ["ತೀರಾ ಸುಸ್ತು", "ಪ್ರಜ್ಞೆ ಇಲ್ಲ", "ಚೇತನವಿಲ್ಲ", "tumba sustu"],
+        "ta": ["மிகவும் சோர்வு", "சுயநினைவில்லை", "asaiyavillai"],
+        "te": ["తీవ్ర అలసట", "స్పృహ లేదు", "sustu", "chaitanyam ledu"]
+      }
+    },
+    {
+      "code": "DS_NB_CONVULSIONS",
+      "category": "NEWBORN_HBNC",
+      "canonical_name": "Newborn convulsions or twitching fits",
+      "priority": "IMMEDIATE_EMERGENCY",
+      "referral_advice": {
+        "en": "Emergency: Newborn convulsions or fits detected. Transfer to pediatric hospital immediately via 108.",
+        "hi": "आपातकालीन: नवजात को झटके या दौरे आ रहे हैं। 108 से तुरंत बाल चिकित्सालय ले जाएं।",
+        "kn": "ತುರ್ತು ಪರಿಸ್ಥಿತಿ: ಮಗುವಿಗೆ ಫಿಟ್ಸ್ ಅಥವಾ ನಡುಕ ಕಾಣಿಸಿಕೊಂಡಿದೆ. ತಕ್ಷಣ 108 ಆಸ್ಪತ್ರೆಗೆ ಕಳುಹಿಸಿ.",
+        "ta": "அவசரம்: குழந்தைக்கு வலிப்பு அல்லது நடுக்கம் உள்ளது. உடனே 108 மூலம் மருத்துவமனைக்கு அழைத்துச் செல்லவும்.",
+        "te": "అత్యవసరం: శిశువుకు ఫిట్స్ లేదా వణుకు వస్తోంది. వెంటనే 108 ద్వారా ఆసుపత్రికి తరలించండి."
+      },
+      "keywords": {
+        "en": ["newborn fits", "baby convulsions", "baby twitching", "jhatke baby"],
+        "hi": ["नवजात को दौरे", "झटके आना", "doure", "bachhe ko fit"],
+        "kn": ["ಮಗುವಿಗೆ ಫಿಟ್ಸ್", "ನಡುಕ", "fits", "jhatka"],
+        "ta": ["குழந்தைக்கு வலிப்பு", "நடுக்கம்", "valippu"],
+        "te": ["శిశువుకు ఫిట్స్", "వణుకు", "fits"]
+      }
+    },
+    {
+      "code": "DS_NB_UMBILICAL_PUS",
+      "category": "NEWBORN_HBNC",
+      "canonical_name": "Severe umbilical infection (pus discharge, foul odor, or redness spreading to skin)",
+      "priority": "HIGH",
+      "referral_advice": {
+        "en": "High risk: Umbilical cord infection with pus discharge. Immediate PHC evaluation required. Do not apply home remedies.",
+        "hi": "गंभीर स्थिति: नाभि से मवाद (पीब) बह रहा है या लाली फैल रही है। तुरंत पीएचसी दिखाएं। कोई घरेलू लेप न लगाएं।",
+        "kn": "ತೀವ್ರ ಸ್ಥಿತಿ: ಹೊಕ್ಕುಳಿನಿಂದ ಕೀವು ಬರುತ್ತಿದೆ ಅಥವಾ ದುರ್ವಾಸನೆ ಇದೆ. ತಕ್ಷಣ PHC ಗೆ ತೋರಿಸಿ. ಯಾವುದೇ ಮುಲಾಮು ಹಚ್ಚಬೇಡಿ.",
+        "ta": "ஆபத்தான நிலை: தொப்புள் கொடியில் சீழ் வடிகிறது அல்லது துர்நாற்றம் வீசுகிறது. உடனடியாக PHC க்கு காட்டவும்.",
+        "te": "ప్రమాదకర పరిస్థితి: బొడ్డు నుండి చీము కారుతోంది లేదా ఎర్రబడింది. వెంటనే PHC కి చూపించండి."
+      },
+      "keywords": {
+        "en": ["umbilical pus", "pus from navel", "cord infection", "foul smell cord", "redness navel", "peeb"],
+        "hi": ["नाभि से मवाद", "नाभि में पीब", "nabhi se pus", "nabhi lal", "peeb nikalna"],
+        "kn": ["ಹೊಕ್ಕುಳಲ್ಲಿ ಕೀವು", "ಹೊಕ್ಕುಳು ಕೆಂಪಾಗಿದೆ", "keevu baruttide", "hokkalu"],
+        "ta": ["தொப்புளில் சீழ்", "தொப்புள் சிவந்துவிட்டது", "thoppul seezh"],
+        "te": ["బొడ్డులో చీము", "బొడ్డు ఎర్రబడటం", "boddu cheemu"]
+      }
+    }
+  ]
+}
