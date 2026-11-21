@@ -594,3 +594,61 @@ async def test_p307_anti_hallucination_numeric_anchor_and_strict_language_lock()
     assert matches_locked_language(turn.extraction.spoken_readback, "en-IN") is True
     assert "54" in turn.extraction.spoken_readback
     assert "सुनीता" not in turn.extraction.spoken_readback
+
+
+async def test_p309_empty_draft_yes_save_overrides_llm_saved_lie_and_blocks_ghost_save():
+    """Verify P3-09: empty draft + 'Yes save' says 'nothing to save yet' and non-confirming words never ghost-save."""
+    from app.pipeline.llm import GeminiExtractionPayload, LLMProvider, is_explicit_save_confirmation
+
+    assert is_explicit_save_confirmation("Yes save") is True
+    assert is_explicit_save_confirmation("haan theek hai") is True
+    assert is_explicit_save_confirmation("sari") is True
+    assert is_explicit_save_confirmation("ह") is False
+    assert is_explicit_save_confirmation("ये") is False
+    assert is_explicit_save_confirmation("अच्छा") is False
+    assert is_explicit_save_confirmation("hmm") is False
+    assert is_explicit_save_confirmation("No, weight is 2.8 kilo") is False
+
+    class PrematureConfirmLLM(LLMProvider):
+        async def extract(self, *args, **kwargs) -> GeminiExtractionPayload:
+            return GeminiExtractionPayload(
+                intent="CONFIRM_SAVE",
+                spoken_readback="Thank you, the record has been saved!",  # Hallucinated save lie!
+            )
+
+    engine = ClinicalStateEngine(provider=PrematureConfirmLLM())
+
+    # 1. Fresh empty draft + "Yes save" -> must NOT save AND must say "nothing to save yet"!
+    empty_turn = await engine.process_turn(
+        utterance="Yes save",
+        current_draft=VisitDraft(),
+        language_code="en-IN",
+        readback_completed=False,
+    )
+    assert empty_turn.should_save is False
+    assert empty_turn.status == "LISTENING"
+    assert "nothing to save" in empty_turn.extraction.spoken_readback.lower()
+    assert "has been saved" not in empty_turn.extraction.spoken_readback.lower()
+
+    # 2. Populated draft after readback + ambiguous non-confirm phrase -> must NOT ghost-save!
+    populated = VisitDraft(beneficiary_id="BEN-001", beneficiary_name="Sunita Devi", visit_type="ANC", weight_kg=54.0)
+    ghost_turn = await engine.process_turn(
+        utterance="wait let me check the diary",
+        current_draft=populated,
+        language_code="en-IN",
+        readback_completed=True,
+    )
+    assert ghost_turn.should_save is False
+    assert ghost_turn.status == "AWAITING_CONFIRMATION"
+    assert ghost_turn.updated_draft.beneficiary_name == "Sunita Devi"
+    assert "has been saved" not in ghost_turn.extraction.spoken_readback.lower()
+
+    # 3. Populated draft after readback + explicit "Yes save" -> saves cleanly!
+    real_save = await engine.process_turn(
+        utterance="Yes save",
+        current_draft=populated,
+        language_code="en-IN",
+        readback_completed=True,
+    )
+    assert real_save.should_save is True
+    assert real_save.status == "SAVED"

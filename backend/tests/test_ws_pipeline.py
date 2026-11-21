@@ -622,3 +622,96 @@ def test_p308_negated_english_never_false_triggers_via_llm_notes_rescan():
             assert form["status"] == "AWAITING_CONFIRMATION"
             assert form["record"]["danger_signs"] == []
             assert form["record"]["weight_kg"] == 54.0
+
+
+def test_p309_spurious_noise_does_not_vanish_fr72_register_form_and_empty_yes_save_refuses():
+    """Verify P3-09: ambient noise ('ह', 'ये', 'अच्छा', 'hmm') never wipes FR-7.2 draft before save."""
+    from app.pipeline.session import is_spurious_noise_transcript
+
+    for noise in ("", "...", "ह।", "ये।", "अच्छा।", "हम्म.", "hmm", "uh", "ಹ", "ಹ್ಮ್", "ಇವು"):
+        assert is_spurious_noise_transcript(noise) is True
+    for real in ("Yes save", "sari", "No, Age is 28", "Savitha Rao, Age 26, Blood Group O+, House 19", "cancel"):
+        assert is_spurious_noise_transcript(real) is False
+
+    cfg = Settings(mock_gnani=True, gemini_api_key="", groq_api_key="")
+    app = create_app(
+        settings=cfg,
+        db_path=":memory:",
+        stt_factory=lambda: MockPrismaSTTClient(partial_delay_s=0.0),
+        tts_factory=lambda: MockTimbreTTSClient(chunk_delay_s=0.0, max_chunks_per_sentence=2),
+        clinical_engine=ClinicalStateEngine(provider=RuleBasedVisitExtractor()),
+    )
+
+    with TestClient(app) as client:
+        reg = client.post(
+            "/api/registers",
+            json={
+                "name": "ANC Intake Test",
+                "fields": [
+                    {"field_name": "Age", "field_type": "NUMBER"},
+                    {"field_name": "Blood Group", "field_type": "TEXT"},
+                    {"field_name": "House / Ward", "field_type": "TEXT"},
+                ],
+            },
+        ).json()
+        reg_id = reg["id"]
+
+        with client.websocket_connect("/ws/session") as ws:
+            # 1. Fresh empty visit draft + "Yes save" -> must say nothing to save and NOT save
+            ws.send_json({"type": "session_start", "language_code": "en-IN"})
+            ws.send_json({"type": "text_turn", "text": "Yes save"})
+            ev_empty, _ = _receive_turn_packets(ws, min_pcm_chunks=1)
+            assert not any(e["type"] == "visit_saved" for e in ev_empty)
+            form_empty = next(e for e in ev_empty if e["type"] == "form_update")
+            assert form_empty["status"] == "LISTENING"
+            assert "nothing to save" in form_empty["spoken_reply"].lower()
+            ws.send_json({"type": "barge_in"})
+
+            # 2. Switch to FR-7.2 custom register intake & speak Savitha Rao details
+            ws.send_json({"type": "register_select", "register_id": reg_id})
+            for _ in range(10):
+                pkt = ws.receive()
+                if pkt.get("text") and json.loads(pkt["text"]).get("type") == "register_intake_update":
+                    break
+
+            ws.send_json(
+                {
+                    "type": "text_turn",
+                    "text": "Savitha Rao, Age 26, Blood Group O positive, House nineteen",
+                }
+            )
+            ev_fill, _ = _receive_turn_packets(ws, min_pcm_chunks=1)
+            upd_fill = next(e for e in ev_fill if e["type"] == "register_intake_update")
+            assert upd_fill["draft"]["patient_name"] == "Savitha Rao"
+            assert upd_fill["draft"]["field_answers"]["Age"] == 26
+            assert upd_fill["draft"]["field_answers"]["Blood Group"] == "O+"
+            assert upd_fill["draft"]["field_answers"]["House / Ward"] == "House 19"
+            ws.send_json({"type": "barge_in"})
+
+            # 3. Inject ambient noise/fillers -> MUST NOT ghost-save or clear the form!
+            for filler in ("ह।", "ये।", "अच्छा।", "hmm"):
+                ws.send_json({"type": "text_turn", "text": filler})
+
+            # 4. Now voice-correct Age 26 -> 28 -> draft MUST still be intact!
+            ws.send_json({"type": "text_turn", "text": "No, Age is 28"})
+            ev_fix, _ = _receive_turn_packets(ws, min_pcm_chunks=1)
+            assert not any(e["type"] == "patient_saved" for e in ev_fix)
+            upd_fix = next(e for e in ev_fix if e["type"] == "register_intake_update")
+            assert upd_fix["draft"]["patient_name"] == "Savitha Rao"
+            assert upd_fix["draft"]["field_answers"]["Age"] == 28
+            assert upd_fix["field_diff"] == {"field": "Age", "old_value": 26, "new_value": 28}
+            ws.send_json({"type": "barge_in"})
+
+            # 5. Explicit "Yes save" commits exactly 1 patient with normalized answers
+            ws.send_json({"type": "text_turn", "text": "Yes save"})
+            ev_save, _ = _receive_turn_packets(ws, min_pcm_chunks=1)
+            saved = next(e for e in ev_save if e["type"] == "patient_saved")
+            assert saved["patient"]["patient_name"] == "Savitha Rao"
+            assert saved["patient"]["field_answers"]["Age"] == 28
+            assert saved["patient"]["field_answers"]["House / Ward"] == "House 19"
+
+        # Confirm zero empty visits saved and exactly 1 Savitha Rao patient saved
+        assert client.get("/api/visits").json() == []
+        patients = client.get(f"/api/registers/{reg_id}/patients").json()
+        assert len(patients) == 1
+        assert patients[0]["field_answers"]["House / Ward"] == "House 19"

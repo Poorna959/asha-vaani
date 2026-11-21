@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from typing import Any, Optional
 
@@ -53,6 +54,41 @@ from app.services.register_service import (
 )
 
 logger = logging.getLogger(__name__)
+
+_SPURIOUS_FILLER_TOKENS = frozenset(
+    {
+        "hm", "hmm", "hmmm", "uh", "uhh", "um", "umm", "ah", "ahh", "eh", "oh", "mm", "mmm",
+        "achha", "accha", "haan", "han", "haa",
+        "ह", "हं", "हूँ", "हूं", "हम्म", "हम", "ये", "अच्छा", "जी",
+        "ಹ", "ಹ್ಮ್", "ಇವು", "ಹಾಂ",
+        "ஹ்ம்", "ம்",
+        "ఉమ్", "హం",
+        "હમ્મ",
+    }
+)
+_VALID_SHORT_COMMANDS = frozenset({"no", "ok", "ஆம்", "சரி"})
+_STRIP_PUNCT_RE = re.compile(r"[\s.,!?;:\-–—'\"।…()\[\]{}]+")
+
+
+def is_spurious_noise_transcript(text: str) -> bool:
+    """Return True for ambient breaths, punctuation-only frames, or single-syllable STT fillers.
+
+    Prevents background noise from triggering uncommanded LLM turns or ghost-saving drafts (P3-09).
+    """
+    if not text:
+        return True
+    cleaned = _STRIP_PUNCT_RE.sub("", text).lower()
+    if not cleaned:
+        return True
+    if any(ch.isdigit() for ch in cleaned):
+        return False
+    if cleaned in _VALID_SHORT_COMMANDS:
+        return False
+    if cleaned in _SPURIOUS_FILLER_TOKENS:
+        return True
+    if len(cleaned) <= 2:
+        return True
+    return False
 
 
 class VoiceSessionOrchestrator:
@@ -354,6 +390,11 @@ class VoiceSessionOrchestrator:
     # ------------------------------------------------------------------
 
     async def _respond_to_final_transcript(self, event: TranscriptEvent) -> None:
+        if is_spurious_noise_transcript(event.text):
+            logger.debug("Ignoring spurious micro-noise transcript: %r", event.text)
+            self._speech_end_ts = None
+            return
+
         turn_start = self._speech_end_ts or time.perf_counter()
         self._speech_end_ts = None
         self.status = "PROCESSING"

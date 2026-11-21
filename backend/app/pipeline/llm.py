@@ -34,7 +34,7 @@ from app.models import (
     VoiceExtractionOutput,
     VoiceIntent,
 )
-from app.pipeline.danger_signs import resolve_short_language
+from app.pipeline.danger_signs import resolve_short_language, transliterate_indic_to_latin
 from app.services.followup import compute_next_visit_plan
 
 logger = logging.getLogger(__name__)
@@ -163,18 +163,83 @@ VACCINE_CANONICAL_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 CONFIRM_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(
         r"^(?:yes|yeah|yep|ok|okay|correct|confirm|confirmed|save|save\s+it|yes\s+save|"
-        r"haan|han|haa|theek\s+hai|thik\s+hai|haan\s+theek\s+hai|sahi\s+hai|save\s+karo|seve\s+karo|"
-        r"sari|houdu|howdu|aam|aama|seri|avunu|sare)[\s.!।,]*$",
+        r"yes\s+please|yes\s+correct|ok\s+save|okay\s+save|go\s+ahead|save\s+record|"
+        r"haan\s+save|haan\s+theek\s+hai|han\s+theek\s+hai|theek\s+hai|thik\s+hai|"
+        r"sahi\s+hai|save\s+karo|seve\s+karo|save\s+kar\s+do|haan\s+ji|"
+        r"sari|sari\s+save|sari\s+ok|houdu|howdu|ulisi|save\s+madi|"
+        r"aam|aama|seri|seri\s+save|save\s+pannu|avunu|sare|sare\s+save|save\s+cheyandi)[\s.!।,]*$",
         re.IGNORECASE,
     ),
     re.compile(
-        r"(?:हाँ\s*ठीक\s*है|ठीक\s*है|सही\s*है|सेव\s*करो|सेव\s*कर\s*दो|"
-        r"ಹೌದು|ಸರಿ\s*ಇದೆ|ಉಳಿಸಿ|ಸೇವ್\s*ಮಾಡಿ|"
+        r"(?:हाँ\s*ठीक\s*है|हाँ\s*सेव|ठीक\s*है|सही\s*है|सेव\s*करो|सेव\s*कर\s*दो|"
+        r"ಹೌದು|ಸರಿ\s*ಇದೆ|ಸರಿ\s*ಸರ್|ಸರಿ\s*ಓಕೆ|ಉಳಿಸಿ|ಸೇವ್\s*ಮಾಡಿ|"
         r"ஆம்|சரி|சேமி|"
         r"అవును|సరే|సేవ్\s*చేయండి)",
         re.IGNORECASE,
     ),
 )
+
+_EXPLICIT_CONFIRM_CONTAINS_RE = re.compile(
+    r"(?<!\w)(?:yes\s+save|save\s+it|save\s+record|save\s+karo|save\s+kar\s+do|"
+    r"save\s+madi|save\s+pannu|save\s+cheyandi|confirm\s+save|haan\s+theek\s+hai|"
+    r"theek\s+hai|thik\s+hai|sahi\s+hai|sari\s+ok|sari\s+save)(?!\w)",
+    re.IGNORECASE,
+)
+
+
+def is_explicit_save_confirmation(utterance: str) -> bool:
+    """Return True ONLY when the worker explicitly spoke a save-confirmation phrase.
+
+    Prevents ambient noise, fillers ('ह', 'ये', 'अच्छा', 'hmm'), or partial speech
+    from ghost-saving and wiping an active VisitDraft or RegisterIntakeDraft (P3-09).
+    """
+    cleaned = utterance.strip()
+    if not cleaned:
+        return False
+    # Never treat a correction utterance ("no, weight is 2.8") as confirmation
+    if CORRECTION_CUE_PATTERN.search(cleaned):
+        return False
+
+    candidates = [cleaned]
+    if any(ord(ch) >= 128 for ch in cleaned):
+        latin = transliterate_indic_to_latin(cleaned)
+        if latin:
+            candidates.append(latin)
+
+    for cand in candidates:
+        if any(p.search(cand) for p in CONFIRM_PATTERNS):
+            return True
+        if _EXPLICIT_CONFIRM_CONTAINS_RE.search(cand):
+            return True
+    return False
+
+
+def build_nothing_to_save_message(
+    language_code: LanguageCode | str,
+    utterance: str = "",
+    register_name: Optional[str] = None,
+) -> str:
+    """Deterministic localized reply when worker says 'Yes save' on an empty draft."""
+    lang = resolve_short_language(language_code, utterance)
+    if register_name:
+        return {
+            "hi": f"अभी {register_name} में सेव करने के लिए कोई जानकारी नहीं है। कृपया पहले मरीज का नाम और विवरण बताएं।",
+            "kn": f"{register_name} ನಲ್ಲಿ ಉಳಿಸಲು ಇನ್ನೂ ಯಾವುದೇ ವಿವರಗಳಿಲ್ಲ. ದಯವಿಟ್ಟು ಮೊದಲು ರೋಗಿಯ ಹೆಸರು ಮತ್ತು ವಿವರಗಳನ್ನು ಹೇಳಿ.",
+            "ta": f"{register_name} பதிவேட்டில் சேமிக்க விவரம் எதுவும் இல்லை. முதலில் நோயாளியின் பெயர் மற்றும் விவரங்களைச் சொல்லவும்.",
+            "te": f"{register_name} లో సేవ్ చేయడానికి వివరాలు ఇంకా లేవు. దయచేసి ముందుగా రోగి పేరు మరియు వివరాలు చెప్పండి.",
+        }.get(
+            lang,
+            f"There is nothing to save yet for {register_name}. Please tell me the patient's name and details first.",
+        )
+    return {
+        "hi": "अभी सेव करने के लिए कोई रिकॉर्ड नहीं है। कृपया पहले मरीज का नाम और विज़िट का विवरण बताएं।",
+        "kn": "ಉಳಿಸಲು ಇನ್ನೂ ಯಾವುದೇ ದಾಖಲೆ ಇಲ್ಲ. ದಯವಿಟ್ಟು ಮೊದಲು ರೋಗಿಯ ಹೆಸರು ಮತ್ತು ಭೇಟಿ ವಿವರಗಳನ್ನು ಹೇಳಿ.",
+        "ta": "சேமிக்க இன்னும் பதிவு எதுவும் இல்லை. முதலில் நோயாளியின் பெயர் மற்றும் வருகை விவரங்களைச் சொல்லவும்.",
+        "te": "సేవ్ చేయడానికి ఇంకా రికార్డు ఏమీ లేదు. దయచేసి ముందుగా రోగి పేరు మరియు విజిట్ వివరాలు చెప్పండి.",
+    }.get(
+        lang,
+        "There is nothing to save yet. Please tell me the beneficiary's name and visit details first.",
+    )
 
 CANCEL_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(
@@ -1326,35 +1391,72 @@ class ClinicalStateEngine:
             if not working.vaccinations_due and suggested_vaccines:
                 working.vaccinations_due = suggested_vaccines
 
-        # Enforce mandatory Read-Back Gate before saving
+        # Enforce mandatory Read-Back Gate & Anti-Ghost-Save Confirmation Guard (P3-09)
         has_minimum_fields = bool(working.beneficiary_name and working.visit_type)
-        if raw_payload.intent == "CONFIRM_SAVE" and readback_completed and has_minimum_fields:
-            lang = resolve_short_language(language_code, utterance)
-            saved_msg = {
-                "hi": "धन्यवाद, विज़िट रिकॉर्ड और फॉलो-अप सेव हो गया है।",
-                "kn": "ಧನ್ಯವಾದಗಳು, ಭೇಟಿ ದಾಖಲೆ ಮತ್ತು ಫಾಲೋ-ಅಪ್ ಉಳಿಸಲಾಗಿದೆ.",
-                "ta": "நன்றி, வருகை பதிவு மற்றும் பின்தொடர்தல் சேமிக்கப்பட்டது.",
-                "te": "ధన్యవాదాలు, విజిట్ రికార్డు మరియు ఫాలో-అప్ సేవ్ చేయబడింది.",
-            }.get(lang, "Thank you, the visit record and follow-up have been saved.")
+        explicit_confirm = is_explicit_save_confirmation(utterance)
+
+        if raw_payload.intent == "CONFIRM_SAVE":
+            if readback_completed and has_minimum_fields and explicit_confirm and not field_diffs:
+                lang = resolve_short_language(language_code, utterance)
+                saved_msg = {
+                    "hi": "धन्यवाद, विज़िट रिकॉर्ड और फॉलो-अप सेव हो गया है।",
+                    "kn": "ಧನ್ಯವಾದಗಳು, ಭೇಟಿ ದಾಖಲೆ ಮತ್ತು ಫಾಲೋ-ಅಪ್ ಉಳಿಸಲಾಗಿದೆ.",
+                    "ta": "நன்றி, வருகை பதிவு மற்றும் பின்தொடர்தல் சேமிக்கப்பட்டது.",
+                    "te": "ధన్యవాదాలు, విజిట్ రికార్డు మరియు ఫాలో-అప్ సేవ్ చేయబడింది.",
+                }.get(lang, "Thank you, the visit record and follow-up have been saved.")
+                return ClinicalTurnResult(
+                    updated_draft=working,
+                    extraction=VoiceExtractionOutput(
+                        intent="CONFIRM_SAVE",
+                        extracted_fields=extracted_fields,
+                        field_diffs=[],
+                        spoken_readback=saved_msg,
+                    ),
+                    status="SAVED",
+                    should_save=True,
+                    readback_completed=True,
+                )
+
+            # Empty draft + "Yes save" -> NEVER let LLM falsely say "saved"!
+            if not has_minimum_fields:
+                return ClinicalTurnResult(
+                    updated_draft=working,
+                    extraction=VoiceExtractionOutput(
+                        intent="ASK_CLARIFICATION",
+                        extracted_fields=extracted_fields,
+                        field_diffs=field_diffs,
+                        spoken_readback=build_nothing_to_save_message(language_code, utterance),
+                    ),
+                    status="LISTENING",
+                    should_save=False,
+                    readback_completed=False,
+                )
+
+            # Non-empty draft but either read-back wasn't completed OR utterance wasn't an explicit confirm:
+            # discard LLM's premature "saved" reply and re-read the draft for explicit confirmation.
+            re_read = build_localized_readback(
+                draft=working,
+                diffs=field_diffs,
+                intent="CORRECT_FIELD" if field_diffs else "LOG_VISIT",
+                language_code=language_code,
+                utterance=utterance,
+            )
             return ClinicalTurnResult(
                 updated_draft=working,
                 extraction=VoiceExtractionOutput(
-                    intent="CONFIRM_SAVE",
+                    intent="CORRECT_FIELD" if field_diffs else "LOG_VISIT",
                     extracted_fields=extracted_fields,
-                    field_diffs=[],
-                    spoken_readback=saved_msg,
+                    field_diffs=field_diffs,
+                    spoken_readback=re_read,
                 ),
-                status="SAVED",
-                should_save=True,
+                status="AWAITING_CONFIRMATION",
+                should_save=False,
                 readback_completed=True,
             )
 
         effective_intent: VoiceIntent = (
             "CORRECT_FIELD" if (raw_payload.intent == "CORRECT_FIELD" or field_diffs) else raw_payload.intent
         )
-        if effective_intent == "CONFIRM_SAVE" and not readback_completed:
-            # Never save without reading back first!
-            effective_intent = "LOG_VISIT"
 
         candidate_reply = raw_payload.spoken_readback.strip()
         if candidate_reply and not matches_locked_language(candidate_reply, language_code):
@@ -1980,29 +2082,59 @@ class RegisterIntakeEngine:
                 diffs.append(FieldDiff(field=key, old_value=old_val, new_value=val))
 
         has_minimum = bool(working.patient_name)
-        if intent == "CONFIRM_SAVE" and readback_completed and has_minimum:
-            lang = resolve_short_language(language_code, cleaned)
-            saved_msg = {
-                "hi": f"धन्यवाद, {working.patient_name} का रिकॉर्ड {register.name} में सेव हो गया है।",
-                "kn": f"ಧನ್ಯವಾದಗಳು, {working.patient_name} ಅವರ ದಾಖಲೆಯನ್ನು {register.name} ನಲ್ಲಿ ಉಳಿಸಲಾಗಿದೆ.",
-                "ta": f"நன்றி, {working.patient_name} பதிவு {register.name} பதிவேட்டில் சேமிக்கப்பட்டது.",
-                "te": f"ధన్యవాదాలు, {working.patient_name} రికార్డు {register.name} లో సేవ్ చేయబడింది.",
-            }.get(lang, f"Thank you, {working.patient_name} has been saved to {register.name}.")
+        explicit_confirm = is_explicit_save_confirmation(cleaned)
+        if intent == "CONFIRM_SAVE":
+            if readback_completed and has_minimum and explicit_confirm and not diffs:
+                lang = resolve_short_language(language_code, cleaned)
+                saved_msg = {
+                    "hi": f"धन्यवाद, {working.patient_name} का रिकॉर्ड {register.name} में सेव हो गया है।",
+                    "kn": f"ಧನ್ಯವಾದಗಳು, {working.patient_name} ಅವರ ದಾಖಲೆಯನ್ನು {register.name} ನಲ್ಲಿ ಉಳಿಸಲಾಗಿದೆ.",
+                    "ta": f"நன்றி, {working.patient_name} பதிவு {register.name} பதிவேட்டில் சேமிக்கப்பட்டது.",
+                    "te": f"ధన్యవాదాలు, {working.patient_name} రికార్డు {register.name} లో సేవ్ చేయబడింది.",
+                }.get(lang, f"Thank you, {working.patient_name} has been saved to {register.name}.")
+                return RegisterIntakeTurnResult(
+                    updated_draft=working,
+                    intent="CONFIRM_SAVE",
+                    field_diffs=[],
+                    spoken_readback=saved_msg,
+                    status="SAVED",
+                    should_save=True,
+                    readback_completed=True,
+                )
+
+            if not has_minimum:
+                return RegisterIntakeTurnResult(
+                    updated_draft=working,
+                    intent="ASK_CLARIFICATION",
+                    field_diffs=diffs,
+                    spoken_readback=build_nothing_to_save_message(
+                        language_code, cleaned, register_name=register.name
+                    ),
+                    status="LISTENING",
+                    should_save=False,
+                    readback_completed=False,
+                )
+
+            re_read = build_register_intake_readback(
+                draft=working,
+                diffs=diffs,
+                intent="CORRECT_FIELD" if diffs else "LOG_VISIT",
+                language_code=language_code,
+                utterance=cleaned,
+            )
             return RegisterIntakeTurnResult(
                 updated_draft=working,
-                intent="CONFIRM_SAVE",
-                field_diffs=[],
-                spoken_readback=saved_msg,
-                status="SAVED",
-                should_save=True,
+                intent="CORRECT_FIELD" if diffs else "LOG_VISIT",
+                field_diffs=diffs,
+                spoken_readback=re_read,
+                status="AWAITING_CONFIRMATION",
+                should_save=False,
                 readback_completed=True,
             )
 
         effective_intent: VoiceIntent = (
             "CORRECT_FIELD" if (intent == "CORRECT_FIELD" or diffs) else intent
         )
-        if effective_intent == "CONFIRM_SAVE" and not readback_completed:
-            effective_intent = "LOG_VISIT"
 
         reply = llm_reply or build_register_intake_readback(
             draft=working,
