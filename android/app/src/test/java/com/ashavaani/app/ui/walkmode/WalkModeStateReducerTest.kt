@@ -111,6 +111,19 @@ class WalkModeStateReducerTest {
         assertEquals("LISTENING", postSave.sessionStatus)
         assertTrue(postSave.toastMessage?.contains("Sunita Devi") == true)
         assertTrue(postSave.toastMessage?.contains("2026-12-19") == true)
+
+        // Trailing form_update(status="SAVED") from backend must NOT re-populate old draft
+        val afterSavedFormEvent = WalkModeStateReducer.reduceServerEvent(
+            postSave,
+            WsFormUpdateEvent(
+                status = "SAVED",
+                record = VisitDraft(beneficiaryId = "BEN-001", beneficiaryName = "Sunita Devi", weightKg = 2.8),
+                spokenReply = "रिकॉर्ड सेव कर दिया गया है।",
+            ),
+        )
+        assertNull(afterSavedFormEvent.visitDraft.beneficiaryName)
+        assertNull(afterSavedFormEvent.followUpContext)
+        assertEquals("रिकॉर्ड सेव कर दिया गया है।", afterSavedFormEvent.agentReadback)
     }
 
     @Test

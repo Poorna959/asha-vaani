@@ -85,28 +85,55 @@ object WalkModeStateReducer {
         }
 
         is WsFormUpdateEvent -> {
-            val primaryDiff = event.fieldDiff ?: event.fieldDiffs.lastOrNull()
-            state.copy(
-                inputMode = WalkInputMode.ROUTINE_VISIT,
-                registerIntakeDraft = null,
-                sessionStatus = event.status,
-                visitDraft = event.record,
-                activeFieldDiff = primaryDiff,
-                agentReadback = event.spokenReply.ifBlank { state.agentReadback },
-                errorBanner = null,
-            )
+            if (event.status.equals("SAVED", ignoreCase = true)) {
+                state.copy(
+                    inputMode = WalkInputMode.ROUTINE_VISIT,
+                    registerIntakeDraft = null,
+                    sessionStatus = "LISTENING",
+                    visitDraft = VisitDraft(),
+                    followUpContext = null,
+                    activeFieldDiff = null,
+                    agentReadback = event.spokenReply.ifBlank { state.agentReadback },
+                    errorBanner = null,
+                )
+            } else {
+                val primaryDiff = event.fieldDiff ?: event.fieldDiffs.lastOrNull()
+                state.copy(
+                    inputMode = WalkInputMode.ROUTINE_VISIT,
+                    registerIntakeDraft = null,
+                    sessionStatus = event.status,
+                    visitDraft = event.record,
+                    activeFieldDiff = primaryDiff,
+                    agentReadback = event.spokenReply.ifBlank { state.agentReadback },
+                    errorBanner = null,
+                )
+            }
         }
 
         is WsRegisterIntakeUpdateEvent -> {
-            val primaryDiff = event.fieldDiff ?: event.fieldDiffs.lastOrNull()
-            state.copy(
-                inputMode = WalkInputMode.REGISTER_INTAKE,
-                sessionStatus = event.status,
-                registerIntakeDraft = event.draft,
-                activeFieldDiff = primaryDiff,
-                agentReadback = event.spokenReply.ifBlank { state.agentReadback },
-                errorBanner = null,
-            )
+            if (event.status.equals("SAVED", ignoreCase = true)) {
+                state.copy(
+                    inputMode = WalkInputMode.REGISTER_INTAKE,
+                    sessionStatus = "LISTENING",
+                    registerIntakeDraft = event.draft.copy(
+                        patientName = null,
+                        fieldAnswers = emptyMap(),
+                    ),
+                    activeFieldDiff = null,
+                    agentReadback = event.spokenReply.ifBlank { state.agentReadback },
+                    errorBanner = null,
+                )
+            } else {
+                val primaryDiff = event.fieldDiff ?: event.fieldDiffs.lastOrNull()
+                state.copy(
+                    inputMode = WalkInputMode.REGISTER_INTAKE,
+                    sessionStatus = event.status,
+                    registerIntakeDraft = event.draft,
+                    activeFieldDiff = primaryDiff,
+                    agentReadback = event.spokenReply.ifBlank { state.agentReadback },
+                    errorBanner = null,
+                )
+            }
         }
 
         is WsDangerEscalationEvent -> {
