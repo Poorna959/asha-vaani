@@ -1,5 +1,6 @@
 package com.ashavaani.app.ui.registers
 
+import com.ashavaani.app.model.PatientRecord
 import com.ashavaani.app.model.RegisterFieldCreate
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
@@ -82,4 +83,54 @@ object RegisterFieldHelpers {
     }
 
     fun fileProviderAuthority(packageName: String): String = "$packageName.fileprovider"
+
+    private val NAME_PUNCT_REGEX = Regex("[^a-z0-9\\u0900-\\u0d7f\\s]+", RegexOption.IGNORE_CASE)
+    private val DOUBLE_LETTER_REGEX = Regex("([a-z])\\1+")
+    private val PHONETIC_DIGRAPH_SUBS: List<Pair<String, String>> = listOf(
+        "chh" to "ch",
+        "th" to "t",
+        "dh" to "d",
+        "bh" to "b",
+        "ph" to "p",
+        "kh" to "k",
+        "gh" to "g",
+        "sh" to "s",
+        "ee" to "i",
+        "ii" to "i",
+        "oo" to "u",
+        "uu" to "u",
+        "aa" to "a",
+    )
+
+    /**
+     * Phonetic Indic-English name key matching backend `normalize_patient_name_key`
+     * (e.g. "Savitha Rao" == "Savita Rao", "Suneetha Devi" == "Sunita Devi").
+     */
+    fun normalizePatientNameKey(name: String): String {
+        val cleaned = NAME_PUNCT_REGEX.replace(name.trim().lowercase(), " ")
+        val tokens = cleaned.split(Regex("\\s+")).filter { it.isNotBlank() }
+        return tokens.joinToString(" ") { raw ->
+            var t = raw
+            for ((src, dst) in PHONETIC_DIGRAPH_SUBS) {
+                t = t.replace(src, dst)
+            }
+            t = DOUBLE_LETTER_REGEX.replace(t, "$1")
+            if (t.endsWith("y") && t.length > 2) {
+                t = t.dropLast(1) + "i"
+            }
+            t
+        }
+    }
+
+    /**
+     * Find an existing patient in the register matching [candidateName] phonetically.
+     */
+    fun findMatchingPatient(
+        candidateName: String,
+        patients: List<PatientRecord>,
+    ): PatientRecord? {
+        val key = normalizePatientNameKey(candidateName)
+        if (key.isEmpty()) return null
+        return patients.firstOrNull { normalizePatientNameKey(it.patientName) == key }
+    }
 }

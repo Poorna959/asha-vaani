@@ -72,12 +72,12 @@ class RegistersViewModel(
     val errorBanner: StateFlow<String?> = _errorBanner.asStateFlow()
 
     init {
-        refreshAll()
+        refreshAll(force = false)
     }
 
-    fun refreshAll() {
+    fun refreshAll(force: Boolean = true) {
         viewModelScope.launch {
-            repository.refreshAllFromServer()
+            repository.refreshAllFromServer(force = force)
         }
     }
 
@@ -147,7 +147,11 @@ class RegistersViewModel(
                     fieldAnswers = answers,
                 ),
             ).onSuccess { created ->
-                _statusToast.value = "Added ${created.patientName}"
+                _statusToast.value = if (created.matchedExisting) {
+                    "Updated existing ${created.patientName}"
+                } else {
+                    "Added ${created.patientName}"
+                }
                 onSuccess(created)
             }.onFailure { err ->
                 _errorBanner.value = "Could not add patient: ${err.message}"

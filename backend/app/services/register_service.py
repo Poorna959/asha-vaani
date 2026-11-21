@@ -49,6 +49,41 @@ def _sanitize_sheet_title(name: str) -> str:
     return (cleaned or "Register")[:31]
 
 
+_NAME_PUNCT_RE = re.compile(r"[^a-z0-9\u0900-\u0d7f\s]+", re.IGNORECASE)
+_PHONETIC_DIGRAPH_SUBS: tuple[tuple[str, str], ...] = (
+    ("chh", "ch"),
+    ("th", "t"),
+    ("dh", "d"),
+    ("bh", "b"),
+    ("ph", "p"),
+    ("kh", "k"),
+    ("gh", "g"),
+    ("sh", "s"),
+    ("ee", "i"),
+    ("ii", "i"),
+    ("oo", "u"),
+    ("uu", "u"),
+    ("aa", "a"),
+)
+_DOUBLE_LETTER_RE = re.compile(r"([a-z])\1+")
+
+
+def normalize_patient_name_key(name: str) -> str:
+    """Normalize Indian patient names for phonetic duplicate matching (e.g. 'Savitha Rao' == 'Savita Rao')."""
+    cleaned = _NAME_PUNCT_RE.sub(" ", name.strip().lower())
+    tokens = [tok for tok in cleaned.split() if tok]
+    norm_tokens: list[str] = []
+    for tok in tokens:
+        t = tok
+        for src, dst in _PHONETIC_DIGRAPH_SUBS:
+            t = t.replace(src, dst)
+        t = _DOUBLE_LETTER_RE.sub(r"\1", t)
+        if t.endswith("y") and len(t) > 2:
+            t = t[:-1] + "i"
+        norm_tokens.append(t)
+    return " ".join(norm_tokens)
+
+
 def _infer_field_type(value: Any) -> FieldType:
     if isinstance(value, bool):
         return "BOOLEAN"
@@ -165,18 +200,49 @@ class RegisterService:
                     canonical_map[lower_key] = cleaned_key
         return normalized
 
+    async def find_existing_patient_in_register(
+        self,
+        register_id: str,
+        patient_name: str,
+    ) -> Optional[PatientRecord]:
+        """Find an existing patient in the same register using phonetic name normalization."""
+        target_key = normalize_patient_name_key(patient_name)
+        if not target_key:
+            return None
+        patients = await self.db.list_patients(register_id=register_id)
+        for existing in patients:
+            if normalize_patient_name_key(existing.patient_name) == target_key:
+                return existing
+        return None
+
     async def add_patient(
         self,
         payload: PatientRecordCreate,
         auto_add_fields: bool = True,
     ) -> PatientRecord:
-        """Add a new patient record to a custom register."""
+        """Add a patient to a custom register, smartly upserting if the same patient already exists."""
         register = await self.get_register(payload.register_id)
         normalized_answers = await self._normalize_and_sync_answers(
             register=register,
             answers=payload.field_answers,
             auto_add_fields=auto_add_fields,
         )
+
+        existing = await self.find_existing_patient_in_register(register.id, payload.patient_name)
+        if existing is not None and (payload.id is None or payload.id == existing.id):
+            non_empty_updates = {
+                k: v for k, v in normalized_answers.items() if v is not None and v != ""
+            }
+            updated = await self.db.update_patient(
+                existing.id,
+                PatientRecordUpdate(
+                    category=payload.category,
+                    field_answers=non_empty_updates,
+                ),
+            )
+            if updated is not None:
+                return updated.model_copy(update={"matched_existing": True})
+
         cleaned_payload = PatientRecordCreate(
             id=payload.id,
             register_id=register.id,

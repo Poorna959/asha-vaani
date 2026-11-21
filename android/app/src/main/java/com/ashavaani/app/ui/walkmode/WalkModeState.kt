@@ -178,6 +178,8 @@ object WalkModeStateReducer {
         }
 
         is WsPatientSavedEvent -> {
+            val isUpdated = event.matchedExisting || event.patient.matchedExisting
+            val verb = if (isUpdated) "Updated existing" else "Added"
             state.copy(
                 sessionStatus = "LISTENING",
                 registerIntakeDraft = state.registerIntakeDraft?.copy(
@@ -188,7 +190,7 @@ object WalkModeStateReducer {
                 partialTranscript = "",
                 finalTranscript = "",
                 agentReadback = "",
-                toastMessage = "Added ${event.patient.patientName} to ${event.profile.registerName}",
+                toastMessage = "$verb ${event.patient.patientName} in ${event.profile.registerName}",
                 errorBanner = null,
             )
         }

@@ -104,6 +104,7 @@ class PatientRecord(BaseModel):
     field_answers: dict[str, Any] = Field(default_factory=dict)
     created_at: str = Field(default_factory=utc_now_iso)
     updated_at: str = Field(default_factory=utc_now_iso)
+    matched_existing: bool = False
 
 
 class FieldAnswerItem(BaseModel):
@@ -280,6 +281,7 @@ class WsPatientSavedEvent(BaseModel):
     type: Literal["patient_saved"] = "patient_saved"
     patient: PatientRecord
     profile: PatientProfileView
+    matched_existing: bool = False
 
 
 class WsTextTurn(BaseModel):

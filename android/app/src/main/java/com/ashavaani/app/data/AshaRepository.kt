@@ -50,6 +50,8 @@ class AshaRepository(
     private val dao: AshaDao,
     private val api: AshaApiClient,
     val settings: StateFlow<AppSettings>,
+    private val refreshCooldownMs: Long = DEFAULT_REFRESH_COOLDOWN_MS,
+    private val clockMs: () -> Long = { System.currentTimeMillis() },
 ) {
     constructor(
         dao: AshaDao,
@@ -64,6 +66,10 @@ class AshaRepository(
     val isSyncingOutbox: StateFlow<Boolean> = _isSyncingOutbox.asStateFlow()
 
     private val syncMutex = Mutex()
+    private val refreshMutex = Mutex()
+
+    @Volatile
+    private var lastRefreshCompletedAtMs: Long = 0L
 
     private val currentBaseUrl: String get() = settings.value.backendUrl
 
@@ -122,26 +128,51 @@ class AshaRepository(
         h
     }
 
-    suspend fun refreshAllFromServer(): Result<Unit> = runCatching {
-        runCatching { api.fetchHealth(currentBaseUrl) }.onSuccess { _health.value = it }
-
-        // Replay any offline-queued rural mutations in FIFO order before pulling latest server snapshot
-        runCatching { flushPendingSyncOutbox() }
-
-        val registers = api.listRegisters(currentBaseUrl)
-        dao.upsertRegisters(registers.map { it.toEntity() })
-
-        registers.forEach { reg ->
-            runCatching { api.searchRegisterPatients(currentBaseUrl, reg.id) }.onSuccess { patients ->
-                dao.upsertPatients(patients.map { it.toEntity() })
+    /**
+     * Refresh registers, patients, visits, and follow-ups from the server.
+     * Coalesces concurrent ViewModel startup/reconnect bursts into a single network pass
+     * (unless [force] is true, e.g. explicit user pull-to-refresh).
+     */
+    suspend fun refreshAllFromServer(force: Boolean = false): Result<Unit> {
+        if (!force) {
+            val elapsed = clockMs() - lastRefreshCompletedAtMs
+            if (lastRefreshCompletedAtMs > 0L && elapsed in 0L until refreshCooldownMs) {
+                return Result.success(Unit)
             }
+            if (!refreshMutex.tryLock()) {
+                return Result.success(Unit)
+            }
+        } else {
+            refreshMutex.lock()
         }
 
-        val visits = api.listVisits(currentBaseUrl)
-        dao.upsertVisits(visits.map { it.toEntity() })
+        return try {
+            runCatching {
+                runCatching { api.fetchHealth(currentBaseUrl) }.onSuccess { _health.value = it }
 
-        val followUps = api.listFollowUps(currentBaseUrl)
-        dao.upsertFollowUps(followUps.map { it.toEntity() })
+                // Replay any offline-queued rural mutations in FIFO order before pulling latest server snapshot
+                runCatching { flushPendingSyncOutbox() }
+
+                val registers = api.listRegisters(currentBaseUrl)
+                dao.upsertRegisters(registers.map { it.toEntity() })
+
+                registers.forEach { reg ->
+                    runCatching { api.searchRegisterPatients(currentBaseUrl, reg.id) }.onSuccess { patients ->
+                        dao.upsertPatients(patients.map { it.toEntity() })
+                    }
+                }
+
+                val visits = api.listVisits(currentBaseUrl)
+                dao.upsertVisits(visits.map { it.toEntity() })
+
+                val followUps = api.listFollowUps(currentBaseUrl)
+                dao.upsertFollowUps(followUps.map { it.toEntity() })
+
+                lastRefreshCompletedAtMs = clockMs()
+            }
+        } finally {
+            refreshMutex.unlock()
+        }
     }
 
     /**
@@ -423,6 +454,8 @@ class AshaRepository(
     }
 
     companion object {
+        const val DEFAULT_REFRESH_COOLDOWN_MS: Long = 2_000L
+
         /**
          * Pure helper to construct a `Field : Answer` profile view from local Room records.
          */

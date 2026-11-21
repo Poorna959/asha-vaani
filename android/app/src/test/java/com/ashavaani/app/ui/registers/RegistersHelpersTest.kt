@@ -1,7 +1,9 @@
 package com.ashavaani.app.ui.registers
 
+import com.ashavaani.app.model.PatientRecord
 import com.ashavaani.app.model.toDisplayString
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class RegistersHelpersTest {
@@ -49,5 +51,22 @@ class RegistersHelpersTest {
             "com.ashavaani.app.fileprovider",
             RegisterFieldHelpers.fileProviderAuthority("com.ashavaani.app"),
         )
+    }
+
+    @Test
+    fun `P4-06 phonetic patient matcher catches Savita vs Savitha Rao without false positives`() {
+        val existing = listOf(
+            PatientRecord(id = "BEN-011", registerId = "REG-ANC-DEFAULT", patientName = "Savitha Rao"),
+            PatientRecord(id = "BEN-001", registerId = "REG-ANC-DEFAULT", patientName = "Sunita Devi"),
+        )
+
+        val matched = RegisterFieldHelpers.findMatchingPatient("  Savita   Rao ", existing)
+        assertEquals("BEN-011", matched?.id)
+
+        val matchedSunita = RegisterFieldHelpers.findMatchingPatient("Suneetha Devi", existing)
+        assertEquals("BEN-001", matchedSunita?.id)
+
+        assertNull(RegisterFieldHelpers.findMatchingPatient("Savitha Devi", existing))
+        assertNull(RegisterFieldHelpers.findMatchingPatient("   ", existing))
     }
 }

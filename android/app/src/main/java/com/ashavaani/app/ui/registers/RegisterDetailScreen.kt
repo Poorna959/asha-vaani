@@ -88,6 +88,7 @@ fun RegisterDetailScreen(
     onBack: () -> Unit,
     onSearchChange: (String) -> Unit,
     onOpenPatient: (PatientRecord) -> Unit,
+    onStartFollowUpVisit: (patientId: String) -> Unit = {},
     onAddPatientByVoice: (CustomRegister) -> Unit,
     onAddManualPatient: (registerId: String, name: String, category: String, answers: Map<String, JsonElement>) -> Unit,
     onExportRegister: (registerId: String, format: String, exportsDir: File, onReady: (ExportedFile) -> Unit) -> Unit,
@@ -322,6 +323,15 @@ fun RegisterDetailScreen(
     if (showManualAddSheet && register != null) {
         ManualAddPatientSheet(
             register = register,
+            existingPatients = patients,
+            onOpenExistingProfile = { existing ->
+                showManualAddSheet = false
+                onOpenPatient(existing)
+            },
+            onStartFollowUp = { existing ->
+                showManualAddSheet = false
+                onStartFollowUpVisit(existing.id)
+            },
             onSubmit = { name, category, answers ->
                 onAddManualPatient(register.id, name, category, answers)
                 showManualAddSheet = false
@@ -497,6 +507,9 @@ private fun ExportRegisterSheet(
 @Composable
 private fun ManualAddPatientSheet(
     register: CustomRegister,
+    existingPatients: List<PatientRecord>,
+    onOpenExistingProfile: (PatientRecord) -> Unit,
+    onStartFollowUp: (PatientRecord) -> Unit,
     onSubmit: (name: String, category: String, answers: Map<String, JsonElement>) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -504,6 +517,9 @@ private fun ManualAddPatientSheet(
     var patientName by remember { mutableStateOf("") }
     var category by remember { mutableStateOf(RegisterFieldHelpers.inferRegisterCategory(register.name)) }
     val fieldInputs = remember(register.id) { mutableStateMapOf<String, String>() }
+    val matchedExisting = remember(patientName, existingPatients) {
+        RegisterFieldHelpers.findMatchingPatient(patientName, existingPatients)
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -540,6 +556,51 @@ private fun ManualAddPatientSheet(
                 shape = RoundedCornerShape(12.dp),
                 modifier = Modifier.fillMaxWidth(),
             )
+
+            if (matchedExisting != null) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp),
+                    color = AshaColors.VoiceDiffSurface,
+                    border = BorderStroke(1.5.dp, AshaColors.VoiceDiffAmber),
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            text = "Already registered (${matchedExisting.id}): ${matchedExisting.patientName}",
+                            color = AshaColors.VoiceDiffAmberDark,
+                            style = MaterialTheme.typography.labelLarge,
+                        )
+                        Text(
+                            text = "Saving will merge updates into her existing record instead of creating a duplicate.",
+                            color = AshaColors.InkSecondary,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(
+                                onClick = { onOpenExistingProfile(matchedExisting) },
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Text("Open Profile", style = MaterialTheme.typography.labelMedium)
+                            }
+                            Button(
+                                onClick = { onStartFollowUp(matchedExisting) },
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = AshaColors.ClinicalTeal,
+                                    contentColor = AshaColors.PureWhite,
+                                ),
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Text("Start Follow-Up", style = MaterialTheme.typography.labelMedium)
+                            }
+                        }
+                    }
+                }
+            }
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 RegisterFieldHelpers.PATIENT_CATEGORIES.forEach { cat ->
@@ -594,7 +655,10 @@ private fun ManualAddPatientSheet(
                     contentColor = AshaColors.PureWhite,
                 ),
             ) {
-                Text("Save Patient", style = MaterialTheme.typography.labelLarge)
+                Text(
+                    text = if (matchedExisting != null) "Update Existing Record" else "Save Patient",
+                    style = MaterialTheme.typography.labelLarge,
+                )
             }
 
             Spacer(modifier = Modifier.height(6.dp))

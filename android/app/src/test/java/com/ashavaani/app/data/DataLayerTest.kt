@@ -319,6 +319,60 @@ class DataLayerTest {
         assertEquals("Meera Bai", fakeDao.getPatientById("BEN-SRV-1")?.patientName)
     }
 
+    @Test
+    fun `P4-06 refreshAllFromServer coalesces rapid startup bursts and honors force refresh`() = runBlocking {
+        val fakeDao = InMemoryAshaDao()
+        var listRegisterCalls = 0
+        var nowMs = 10_000L
+
+        val fakeApi = object : AshaApiClient() {
+            override suspend fun fetchHealth(baseUrl: String) =
+                com.ashavaani.app.model.HealthResponse(status = "ok", gnaniMode = "live")
+
+            override suspend fun listRegisters(baseUrl: String): List<CustomRegister> {
+                listRegisterCalls += 1
+                return emptyList()
+            }
+
+            override suspend fun listVisits(
+                baseUrl: String,
+                beneficiaryId: String?,
+                onlyDanger: Boolean,
+            ) = emptyList<VisitRecord>()
+
+            override suspend fun listFollowUps(
+                baseUrl: String,
+                status: String?,
+                beneficiaryId: String?,
+            ) = emptyList<FollowUp>()
+        }
+
+        val repo = AshaRepository(
+            dao = fakeDao,
+            api = fakeApi,
+            settings = MutableStateFlow(AppSettings()),
+            refreshCooldownMs = 2_000L,
+            clockMs = { nowMs },
+        )
+
+        // 3 rapid startup calls within 200ms -> coalesced into a single network pass!
+        repo.refreshAllFromServer()
+        nowMs += 100L
+        repo.refreshAllFromServer()
+        nowMs += 100L
+        repo.refreshAllFromServer()
+        assertEquals(1, listRegisterCalls)
+
+        // Explicit force=true bypasses cooldown (manual Refresh tap)
+        repo.refreshAllFromServer(force = true)
+        assertEquals(2, listRegisterCalls)
+
+        // After cooldown window expires (>2s), normal refresh runs cleanly again
+        nowMs += 2_500L
+        repo.refreshAllFromServer()
+        assertEquals(3, listRegisterCalls)
+    }
+
     private class InMemoryAshaDao : AshaDao {
         private val registers = MutableStateFlow<Map<String, CustomRegisterEntity>>(emptyMap())
         private val patients = MutableStateFlow<Map<String, PatientEntity>>(emptyMap())

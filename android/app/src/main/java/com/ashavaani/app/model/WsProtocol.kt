@@ -133,6 +133,7 @@ data class WsVisitSavedEvent(
 data class WsPatientSavedEvent(
     val patient: PatientRecord,
     val profile: PatientProfileView,
+    @SerialName("matched_existing") val matchedExisting: Boolean = false,
 ) : WsServerEvent
 
 @Serializable

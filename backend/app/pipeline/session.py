@@ -561,13 +561,18 @@ class VoiceSessionOrchestrator:
                     # Refresh register schema in case new fields were auto-synced
                     self.active_register = await self.register_service.get_register(self.active_register.id)
                     await self._send_json(
-                        WsPatientSavedEvent(patient=saved_patient, profile=profile_view).model_dump()
+                        WsPatientSavedEvent(
+                            patient=saved_patient,
+                            profile=profile_view,
+                            matched_existing=saved_patient.matched_existing,
+                        ).model_dump()
                     )
                     self._publish_dashboard_event(
                         "patient_saved",
                         {
                             "patient": saved_patient.model_dump(),
                             "register_name": self.active_register.name,
+                            "matched_existing": saved_patient.matched_existing,
                         },
                     )
                     await self._send_json(

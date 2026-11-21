@@ -239,6 +239,10 @@ fun AshaVaaniAppShell(
                         registersViewModel.loadPatientProfile(patient.id)
                         navController.navigate(AshaSubRoutes.patientProfile(registerId, patient.id))
                     },
+                    onStartFollowUpVisit = { pid ->
+                        walkModeViewModel.startPatientFollowUp(pid)
+                        navigateToWalkMode()
+                    },
                     onAddPatientByVoice = { reg ->
                         walkModeViewModel.startRegisterVoiceIntake(
                             registerId = reg.id,

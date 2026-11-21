@@ -136,6 +136,7 @@ data class PatientRecord(
     @SerialName("field_answers") val fieldAnswers: Map<String, JsonElement> = emptyMap(),
     @SerialName("created_at") val createdAt: String = "",
     @SerialName("updated_at") val updatedAt: String = "",
+    @SerialName("matched_existing") val matchedExisting: Boolean = false,
 )
 
 @Serializable

@@ -265,3 +265,73 @@ def test_register_rest_endpoints_end_to_end():
         assert "immunisation_drive.xlsx" in xlsx_resp.headers["content-disposition"]
         wb = load_workbook(io.BytesIO(xlsx_resp.content))
         assert wb.active.cell(row=2, column=2).value == "Rohan Kumar"
+
+
+async def test_p406_duplicate_patient_prevention_and_phonetic_upsert():
+    """Verify P4-06: 'Savitha Rao' + 'Savita Rao' merge into one updated record with matched_existing=True."""
+    from app.services.register_service import normalize_patient_name_key
+
+    assert normalize_patient_name_key("Savitha Rao") == normalize_patient_name_key("Savita Rao")
+    assert normalize_patient_name_key("Suneetha Devi") == normalize_patient_name_key("Sunita Devi")
+    assert normalize_patient_name_key("Kavitha Reddy") == normalize_patient_name_key("Kavita Reddi")
+    assert normalize_patient_name_key("Savitha Rao") != normalize_patient_name_key("Savitha Devi")
+
+    db = Database(":memory:")
+    await db.connect()
+    await db.seed_default_data()
+    svc = RegisterService(db)
+
+    try:
+        reg = await svc.create_register(
+            CustomRegisterCreate(
+                name="ANC Duplicate Guard Test",
+                fields=[
+                    RegisterFieldCreate(field_name="Age", field_type="NUMBER"),
+                    RegisterFieldCreate(field_name="Blood Group", field_type="TEXT"),
+                    RegisterFieldCreate(field_name="House / Ward", field_type="TEXT"),
+                ],
+            )
+        )
+
+        # 1. Initial onboarding of Savitha Rao
+        p1 = await svc.add_patient(
+            PatientRecordCreate(
+                register_id=reg.id,
+                patient_name="Savitha Rao",
+                category="ANC",
+                field_answers={"Age": 26, "Blood Group": "O+", "House / Ward": "House 19"},
+            )
+        )
+        assert p1.matched_existing is False
+
+        # 2. Re-adding with phonetic spelling 'Savita Rao' & updated Age merges into p1 (NO duplicate!)
+        p2 = await svc.add_patient(
+            PatientRecordCreate(
+                register_id=reg.id,
+                patient_name="  Savita   Rao ",
+                category="ANC",
+                field_answers={"Age": 28, "Blood Group": ""},  # empty value must NOT wipe existing O+
+            )
+        )
+        assert p2.matched_existing is True
+        assert p2.id == p1.id
+        assert p2.field_answers["Age"] == 28
+        assert p2.field_answers["Blood Group"] == "O+"
+        assert p2.field_answers["House / Ward"] == "House 19"
+
+        # 3. Different person with same first name ('Savitha Devi') MUST still create a separate row
+        p3 = await svc.add_patient(
+            PatientRecordCreate(
+                register_id=reg.id,
+                patient_name="Savitha Devi",
+                category="ANC",
+                field_answers={"Age": 24},
+            )
+        )
+        assert p3.matched_existing is False
+        assert p3.id != p1.id
+
+        all_patients = await svc.search_patients(reg.id)
+        assert len(all_patients) == 2
+    finally:
+        await db.close()
