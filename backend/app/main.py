@@ -15,7 +15,12 @@ from app.pipeline.compliance import ComplianceGuardrail
 from app.pipeline.danger_signs import DangerSignDetector
 from app.pipeline.gnani_stt import BaseSTTClient, create_stt_client
 from app.pipeline.gnani_tts import BaseTTSClient, create_tts_client
-from app.pipeline.llm import ClinicalStateEngine, GeminiVisitExtractor, RegisterIntakeEngine
+from app.pipeline.llm import (
+    ClinicalStateEngine,
+    RegisterIntakeEngine,
+    create_visit_extractor,
+    resolve_active_llm_info,
+)
 from app.pipeline.session import VoiceSessionOrchestrator
 from app.routers.registers import router as registers_router
 from app.routers.visits import router as visits_router
@@ -41,14 +46,15 @@ def create_app(
         danger_detector = DangerSignDetector(cfg.danger_signs_path)
         compliance_guardrail = ComplianceGuardrail(danger_detector=danger_detector)
         engine = clinical_engine or ClinicalStateEngine(
-            provider=GeminiVisitExtractor(
-                api_key=cfg.gemini_api_key,
-                model=cfg.gemini_model,
-            )
+            provider=create_visit_extractor(cfg)
         )
         register_intake_engine = RegisterIntakeEngine(
             api_key=cfg.gemini_api_key,
             model=cfg.gemini_model,
+            groq_api_key=cfg.groq_api_key,
+            groq_model=cfg.groq_model,
+            groq_base_url=cfg.groq_base_url,
+            llm_provider=cfg.llm_provider,
         )
 
         app.state.settings = cfg
@@ -86,12 +92,14 @@ def create_app(
 
     @app.get("/health", tags=["system"])
     async def health() -> dict[str, object]:
+        llm_mode, llm_model = resolve_active_llm_info(cfg)
         return {
             "status": "ok",
             "gnani_mode": "mock" if cfg.mock_gnani else "live",
+            "llm_mode": llm_mode,
             "stt_model": "prisma-v3.0",
             "tts_model": "timbre-v3.0",
-            "llm_model": cfg.gemini_model,
+            "llm_model": llm_model,
             "danger_signs_count": len(app.state.danger_detector.canonical_codes),
         }
 

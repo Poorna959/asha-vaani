@@ -72,10 +72,116 @@ POST_NEGATION_TOKENS = frozenset(
 )
 
 NEWBORN_CONTEXT_PATTERN = re.compile(
-    r"(?:(?<!\w)(?:newborn|new\s+born|baby|infant|neonate|navjat|bacha|bachhe|bachha|magu|kuzhandhai|sisuvu|bidda)(?!\w)"
-    r"|नवजात|बच्चे|बच्चा|ಮಗು|குழந்தை|శిశువు|బిడ్డ)",
+    r"(?:(?<!\w)(?:newborn|new\s+born|baby|bebi|infant|neonate|navjat|bacha|bachhe|bachha|magu|kuzhandhai|sisuvu|bidda)(?!\w)"
+    r"|नवजात|बच्चे|बच्चा|बेबी|ಮಗು|ಬೇಬಿ|குழந்தை|శిశువు|బిడ్డ|ਬੇਬੀ)",
     re.IGNORECASE,
 )
+
+# Zero-dependency ISCII-aligned Indic -> Latin phonetic transliterator covering
+# Devanagari (hi), Gurmukhi (pa), Tamil (ta), Telugu (te), Kannada (kn), Malayalam (ml).
+# Enables deterministic danger-sign matching even when streaming STT writes English
+# clinical words phonetically in an Indic script (e.g. "ಸಿವಿಯರ್ ಹೆಡೆಕ್" -> "siviyar hedek").
+_INDIC_BLOCK_BASES: tuple[int, ...] = (
+    0x0900,  # Devanagari
+    0x0A00,  # Gurmukhi
+    0x0B80,  # Tamil
+    0x0C00,  # Telugu
+    0x0C80,  # Kannada
+    0x0D00,  # Malayalam
+)
+
+_INDEP_VOWELS: dict[int, str] = {
+    0x05: "a", 0x06: "a", 0x07: "i", 0x08: "i", 0x09: "u", 0x0A: "u",
+    0x0B: "ri", 0x0E: "e", 0x0F: "e", 0x10: "ai", 0x12: "o", 0x13: "o", 0x14: "au",
+}
+
+_CONSONANTS: dict[int, str] = {
+    0x15: "k", 0x16: "kh", 0x17: "g", 0x18: "gh", 0x19: "ng",
+    0x1A: "ch", 0x1B: "chh", 0x1C: "j", 0x1D: "jh", 0x1E: "ny",
+    0x1F: "t", 0x20: "th", 0x21: "d", 0x22: "dh", 0x23: "n",
+    0x24: "t", 0x25: "th", 0x26: "d", 0x27: "dh", 0x28: "n", 0x29: "n",
+    0x2A: "p", 0x2B: "f", 0x2C: "b", 0x2D: "bh", 0x2E: "m",
+    0x2F: "y", 0x30: "r", 0x31: "r", 0x32: "l", 0x33: "l", 0x34: "zh",
+    0x35: "v", 0x36: "sh", 0x37: "sh", 0x38: "s", 0x39: "h",
+    # Devanagari nukta letters (क़, ख़, ग़, ज़, फ़)
+    0x58: "k", 0x59: "kh", 0x5A: "g", 0x5B: "z", 0x5E: "f",
+}
+
+_MATRAS: dict[int, str] = {
+    0x3E: "a", 0x3F: "i", 0x40: "i", 0x41: "u", 0x42: "u", 0x43: "ri",
+    0x45: "a", 0x46: "e", 0x47: "e", 0x48: "ai", 0x49: "o", 0x4A: "o", 0x4B: "o", 0x4C: "au",
+}
+
+_ANUSVARA_OFFSETS: frozenset[int] = frozenset({0x01, 0x02, 0x70})  # chandrabindu / anusvara / tippi
+_VIRAMA_OFFSET = 0x4D
+_NUKTA_OFFSET = 0x3C
+
+
+def transliterate_indic_to_latin(text: str) -> str:
+    """Convert Indic script text into simplified phonetic Latin for code-mix keyword matching."""
+    out: list[str] = []
+    n = len(text)
+    i = 0
+    while i < n:
+        ch = text[i]
+        cp = ord(ch)
+        base = None
+        for b in _INDIC_BLOCK_BASES:
+            if b <= cp < b + 0x80:
+                base = b
+                break
+        if base is None:
+            out.append(ch)
+            i += 1
+            continue
+
+        off = cp - base
+        if off in _CONSONANTS:
+            cons = _CONSONANTS[off]
+            j = i + 1
+            # Consume optional nukta (e.g. फ + ़ -> f, ज + ़ -> z)
+            if j < n and ord(text[j]) - base == _NUKTA_OFFSET:
+                if off == 0x2B:
+                    cons = "f"
+                elif off == 0x1C:
+                    cons = "z"
+                j += 1
+
+            # Check following matra or virama
+            if j < n:
+                next_off = ord(text[j]) - base
+                if next_off == _VIRAMA_OFFSET:
+                    out.append(cons)
+                    i = j + 1
+                    continue
+                if next_off in _MATRAS:
+                    out.append(cons + _MATRAS[next_off])
+                    i = j + 1
+                    continue
+
+            # North Indian scripts (Devanagari/Gurmukhi) drop word-final schwa;
+            # Dravidian scripts (Kannada/Telugu/Tamil/Malayalam) retain final 'a' (using explicit virama when silent).
+            at_word_end = j >= n or not (base <= ord(text[j]) < base + 0x80)
+            drop_schwa = at_word_end and base in (0x0900, 0x0A00)
+            out.append(cons if drop_schwa else cons + "a")
+            i = j
+            continue
+
+        if off in _INDEP_VOWELS:
+            out.append(_INDEP_VOWELS[off])
+        elif off in _MATRAS:
+            out.append(_MATRAS[off])
+        elif off in _ANUSVARA_OFFSETS:
+            out.append("n")
+        elif off in (_VIRAMA_OFFSET, _NUKTA_OFFSET, 0x71):  # virama / nukta / addak
+            pass
+        elif 0x66 <= off <= 0x6F:  # Indic digits 0-9
+            out.append(str(off - 0x66))
+        else:
+            out.append(" ")
+        i += 1
+
+    return re.sub(r"\s+", " ", "".join(out)).strip()
 
 PRIORITY_RANK: dict[str, int] = {
     "IMMEDIATE_EMERGENCY": 0,
@@ -223,22 +329,33 @@ class DangerSignDetector:
             return []
 
         short_lang = resolve_short_language(language_code, normalized)
-        has_newborn_context = visit_type == "NEWBORN" or bool(
-            NEWBORN_CONTEXT_PATTERN.search(normalized)
+        candidates: list[str] = [normalized]
+        if any(ord(ch) >= 128 for ch in normalized):
+            latin = transliterate_indic_to_latin(normalized)
+            if latin and latin.lower() != normalized.lower():
+                candidates.append(latin)
+
+        has_newborn_context = visit_type == "NEWBORN" or any(
+            bool(NEWBORN_CONTEXT_PATTERN.search(c)) for c in candidates
         )
 
         matched: dict[str, DangerSignAlert] = {}
         for rule in self._rules:
-            for raw_kw, pattern in rule.patterns:
-                match = pattern.search(normalized)
-                if match is None:
-                    continue
-                if rule.code not in NEGATIVE_STATE_CODES and _is_negated_match(
-                    normalized, match.start(), match.end()
-                ):
-                    continue
-                matched[rule.code] = self._to_alert(rule, short_lang, raw_kw)
-                break
+            found_rule = False
+            for candidate in candidates:
+                for raw_kw, pattern in rule.patterns:
+                    match = pattern.search(candidate)
+                    if match is None:
+                        continue
+                    if rule.code not in NEGATIVE_STATE_CODES and _is_negated_match(
+                        candidate, match.start(), match.end()
+                    ):
+                        continue
+                    matched[rule.code] = self._to_alert(rule, short_lang, raw_kw)
+                    found_rule = True
+                    break
+                if found_rule:
+                    break
 
         # Disambiguate maternal vs newborn overlapping symptoms
         if has_newborn_context:

@@ -17,9 +17,10 @@ from abc import ABC, abstractmethod
 from datetime import date, timedelta
 from typing import Any, Optional
 
+import httpx
 from pydantic import BaseModel, Field
 
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.models import (
     CustomRegister,
     FieldDiff,
@@ -290,8 +291,8 @@ def _extract_vaccines(text: str) -> list[str]:
 def _extract_ifa_tablets(text: str) -> Optional[int]:
     norm = normalize_indic_numbers(text)
     explicit = re.search(
-        r"(?:(\d{1,3})\s*(?:ifa\s*(?:goli|tablets?|pills?)|iron\s*(?:goli|tablets?))|"
-        r"(?:ifa\s*(?:goli|tablets?|pills?)|iron\s*(?:goli|tablets?))\s*(?:given|di|diya|count)?\s*(\d{1,3}))",
+        r"(?:(\d{1,3})\s*(?:(?:ifa|आईएफए)\s*(?:goli|goliyan|tablets?|pills?|गोली|गोलियां|ಗುಳಿಗೆ|மாத்திரை|మాత్రలు)?|iron\s*(?:goli|tablets?|गोली))|"
+        r"(?:(?:ifa|आईएफए)\s*(?:goli|goliyan|tablets?|pills?|गोली|गोलियां|ಗುಳಿಗೆ|மாத்திரை|మాత్రలు)|iron\s*(?:goli|tablets?|गोली))\s*(?:given|di|diya|count|दी)?\s*(\d{1,3}))",
         norm,
         re.IGNORECASE,
     )
@@ -299,7 +300,7 @@ def _extract_ifa_tablets(text: str) -> Optional[int]:
         raw_num = explicit.group(1) or explicit.group(2)
         return int(raw_num)
 
-    if re.search(r"(?<!\w)(?:ifa\s*goli|ifa\s*tablets?|iron\s*tablet|आईएफए\s*गोली)(?!\w)", norm, re.IGNORECASE):
+    if re.search(r"(?<!\w)(?:ifa\s*(?:goli|tablets?|गोली)|iron\s*tablet|आईएफए\s*गोली)(?!\w)", norm, re.IGNORECASE):
         return 30  # Standard NHM monthly ANC supply when count not specified
     return None
 
@@ -705,6 +706,237 @@ STRICT RULES:
 """
 
 
+def is_live_api_key(api_key: Optional[str]) -> bool:
+    """Return True only when a non-empty, non-placeholder API key is configured."""
+    if not api_key:
+        return False
+    cleaned = api_key.strip()
+    if not cleaned:
+        return False
+    lower = cleaned.lower()
+    return not (lower.startswith("your_") or lower.startswith("mock_") or lower == "changeme")
+
+
+def is_live_gemini_key(api_key: Optional[str]) -> bool:
+    """Backward-compatible alias checking for a non-placeholder API key."""
+    return is_live_api_key(api_key)
+
+
+GROQ_SYSTEM_INSTRUCTION = SYSTEM_INSTRUCTION + """
+OUTPUT FORMAT: Return ONLY a single compact JSON object (no markdown, no extra text) with exact keys:
+{
+  "intent": "LOG_VISIT" | "CORRECT_FIELD" | "CONFIRM_SAVE" | "CANCEL" | "ASK_CLARIFICATION",
+  "beneficiary_id": string | null,
+  "beneficiary_name": string | null,
+  "visit_type": "ANC" | "NEWBORN" | "IMMUNISATION" | null,
+  "weight_kg": number | null,
+  "vaccinations_due": string[] | null,
+  "next_visit_date": "YYYY-MM-DD" | null,
+  "ifa_tablets_given": integer | null,
+  "notes": string | null,
+  "spoken_readback": string
+}
+Match beneficiary_id from village_roster whenever the patient name matches (even in Devanagari/Kannada/Tamil/Telugu script).
+"""
+
+
+def _strip_json_fences(raw_text: str) -> str:
+    text = raw_text.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s*```$", "", text)
+    return text.strip()
+
+
+def _sanitize_visit_payload(data: dict[str, Any]) -> dict[str, Any]:
+    """Normalize minor LLM JSON quirks before strict Pydantic validation."""
+    cleaned = dict(data)
+    if isinstance(cleaned.get("intent"), str):
+        cleaned["intent"] = cleaned["intent"].strip().upper()
+    vtype = cleaned.get("visit_type")
+    if isinstance(vtype, str):
+        up = vtype.strip().upper()
+        if up in ("ANC", "NEWBORN", "IMMUNISATION"):
+            cleaned["visit_type"] = up
+        elif up == "IMMUNIZATION":
+            cleaned["visit_type"] = "IMMUNISATION"
+        elif up in ("HBNC", "NEONATE", "BABY"):
+            cleaned["visit_type"] = "NEWBORN"
+        else:
+            cleaned["visit_type"] = None
+    vaxes = cleaned.get("vaccinations_due")
+    if isinstance(vaxes, str):
+        cleaned["vaccinations_due"] = [v.strip() for v in vaxes.split(",") if v.strip()] or None
+    elif isinstance(vaxes, list):
+        cleaned["vaccinations_due"] = [str(v).strip() for v in vaxes if str(v).strip()] or None
+    if cleaned.get("spoken_readback") is None:
+        cleaned["spoken_readback"] = ""
+    return cleaned
+
+
+def _groq_reasoning_extra(model: str) -> dict[str, Any]:
+    """Disable/minimize reasoning tokens on Groq models for sub-second voice latency."""
+    low = model.lower()
+    if "qwen3" in low or "qwen/qwen3" in low:
+        return {"reasoning_effort": "none"}
+    if "gpt-oss" in low:
+        return {"reasoning_effort": "low"}
+    return {}
+
+
+class GroqVisitExtractor(LLMProvider):
+    """Low-latency Groq OpenAI-compatible structured clinical extractor with offline fallback."""
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
+        base_url: Optional[str] = None,
+        timeout_s: float = 6.0,
+        fallback: Optional[LLMProvider] = None,
+        http_client: Optional[httpx.AsyncClient] = None,
+    ) -> None:
+        settings = get_settings()
+        self.api_key = api_key if api_key is not None else settings.groq_api_key
+        self.model = model or settings.groq_model
+        self.base_url = (base_url or settings.groq_base_url).rstrip("/")
+        self.timeout_s = timeout_s
+        self.fallback = fallback or RuleBasedVisitExtractor()
+        self._client: Optional[httpx.AsyncClient] = http_client
+
+    def _get_client(self) -> Optional[httpx.AsyncClient]:
+        if self._client is None and is_live_api_key(self.api_key):
+            self._client = httpx.AsyncClient(
+                base_url=self.base_url,
+                headers={
+                    "Authorization": f"Bearer {self.api_key.strip()}",
+                    "Content-Type": "application/json",
+                },
+                timeout=self.timeout_s,
+            )
+        return self._client
+
+    async def extract(
+        self,
+        utterance: str,
+        current_draft: VisitDraft,
+        language_code: LanguageCode | str = "indic-auto",
+        patient_context: Optional[dict[str, Any]] = None,
+        roster: Optional[list[dict[str, Any]]] = None,
+    ) -> GeminiExtractionPayload:
+        client = self._get_client()
+        if client is None:
+            return await self.fallback.extract(
+                utterance=utterance,
+                current_draft=current_draft,
+                language_code=language_code,
+                patient_context=patient_context,
+                roster=roster,
+            )
+
+        roster_summary = [
+            {
+                "id": p.get("id"),
+                "name": p.get("patient_name"),
+                "category": p.get("category"),
+                "house": p.get("field_answers", {}).get("House / Ward", ""),
+            }
+            for p in (roster or [])[:25]
+        ]
+
+        prompt = json.dumps(
+            {
+                "today": date.today().isoformat(),
+                "active_language": language_code,
+                "current_draft": current_draft.model_dump(),
+                "preselected_patient_baseline": patient_context,
+                "village_roster": roster_summary,
+                "asha_utterance": utterance,
+            },
+            ensure_ascii=False,
+        )
+
+        candidate_models = [self.model]
+        if self.model != "openai/gpt-oss-20b":
+            candidate_models.append("openai/gpt-oss-20b")
+
+        for idx, model_name in enumerate(candidate_models):
+            body: dict[str, Any] = {
+                "model": model_name,
+                "messages": [
+                    {"role": "system", "content": GROQ_SYSTEM_INSTRUCTION},
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": 0.1,
+                "max_tokens": 350,
+                "response_format": {"type": "json_object"},
+                **_groq_reasoning_extra(model_name),
+            }
+            try:
+                response = await client.post("/chat/completions", json=body)
+                if response.status_code in (429, 503) and idx + 1 < len(candidate_models):
+                    logger.warning(
+                        "Groq model %s returned HTTP %s; retrying on backup model %s.",
+                        model_name,
+                        response.status_code,
+                        candidate_models[idx + 1],
+                    )
+                    continue
+                response.raise_for_status()
+                data = response.json()
+                content = data["choices"][0]["message"]["content"]
+                if content:
+                    parsed = json.loads(_strip_json_fences(content))
+                    if isinstance(parsed, dict):
+                        return GeminiExtractionPayload.model_validate(_sanitize_visit_payload(parsed))
+            except Exception as exc:  # pragma: no cover - network/API failure fallback
+                if idx + 1 < len(candidate_models):
+                    logger.warning("Groq model %s failed (%s); trying backup model.", model_name, exc)
+                    continue
+                logger.warning("Groq extraction failed (%s); falling back to RuleBasedVisitExtractor.", exc)
+
+        return await self.fallback.extract(
+            utterance=utterance,
+            current_draft=current_draft,
+            language_code=language_code,
+            patient_context=patient_context,
+            roster=roster,
+        )
+
+
+def resolve_active_llm_info(settings: Settings) -> tuple[str, str]:
+    """Return (llm_mode, llm_model) reflecting the active configured LLM provider."""
+    pref = (settings.llm_provider or "gemini").strip().lower()
+    if pref == "groq" and is_live_api_key(settings.groq_api_key):
+        return ("groq", settings.groq_model)
+    if pref == "gemini" and is_live_api_key(settings.gemini_api_key):
+        return ("gemini", settings.gemini_model)
+    if is_live_api_key(settings.groq_api_key):
+        return ("groq", settings.groq_model)
+    if is_live_api_key(settings.gemini_api_key):
+        return ("gemini", settings.gemini_model)
+    fallback_model = settings.groq_model if pref == "groq" else settings.gemini_model
+    return ("offline_fallback", fallback_model)
+
+
+def create_visit_extractor(settings: Optional[Settings] = None) -> LLMProvider:
+    """Factory selecting Groq, Gemini, or deterministic offline fallback based on Settings."""
+    cfg = settings or get_settings()
+    mode, _ = resolve_active_llm_info(cfg)
+    if mode == "groq":
+        return GroqVisitExtractor(
+            api_key=cfg.groq_api_key,
+            model=cfg.groq_model,
+            base_url=cfg.groq_base_url,
+        )
+    if mode == "gemini":
+        return GeminiVisitExtractor(
+            api_key=cfg.gemini_api_key,
+            model=cfg.gemini_model,
+        )
+    return RuleBasedVisitExtractor()
+
+
 class GeminiVisitExtractor(LLMProvider):
     """Gemini 2.5 Flash structured clinical extractor with zero-thinking latency tuning."""
 
@@ -721,10 +953,10 @@ class GeminiVisitExtractor(LLMProvider):
         self._client: Any = None
 
     def _get_client(self) -> Any:
-        if self._client is None and self.api_key:
+        if self._client is None and is_live_gemini_key(self.api_key):
             from google import genai
 
-            self._client = genai.Client(api_key=self.api_key)
+            self._client = genai.Client(api_key=self.api_key.strip())
         return self._client
 
     async def extract(
@@ -1194,25 +1426,166 @@ def build_register_intake_readback(
     return f"For {draft.register_name}: {details}. Is this correct — shall I save?"
 
 
+GROQ_REGISTER_INTAKE_SYSTEM_INSTRUCTION = REGISTER_INTAKE_SYSTEM_INSTRUCTION + """
+OUTPUT FORMAT: Return ONLY a single compact JSON object (no markdown, no extra text) with exact keys:
+{
+  "intent": "LOG_VISIT" | "CORRECT_FIELD" | "CONFIRM_SAVE" | "CANCEL" | "ASK_CLARIFICATION",
+  "patient_name": string | null,
+  "category": "ANC" | "NEWBORN" | "IMMUNISATION" | null,
+  "answers": [{"field_name": string, "value": string}],
+  "spoken_readback": string
+}
+"""
+
+
+def _sanitize_register_intake_payload(data: dict[str, Any]) -> dict[str, Any]:
+    cleaned = dict(data)
+    if isinstance(cleaned.get("intent"), str):
+        cleaned["intent"] = cleaned["intent"].strip().upper()
+    cat = cleaned.get("category")
+    if isinstance(cat, str):
+        up = cat.strip().upper()
+        if up in ("ANC", "NEWBORN", "IMMUNISATION"):
+            cleaned["category"] = up
+        elif up == "IMMUNIZATION":
+            cleaned["category"] = "IMMUNISATION"
+        elif up in ("HBNC", "NEONATE", "BABY"):
+            cleaned["category"] = "NEWBORN"
+        else:
+            cleaned["category"] = None
+    raw_answers = cleaned.get("answers")
+    if isinstance(raw_answers, dict):
+        cleaned["answers"] = [
+            {"field_name": str(k), "value": str(v)}
+            for k, v in raw_answers.items()
+            if v is not None and str(v).strip() != ""
+        ]
+    elif isinstance(raw_answers, list):
+        norm_list = []
+        for item in raw_answers:
+            if isinstance(item, dict) and item.get("field_name") and item.get("value") is not None:
+                norm_list.append(
+                    {"field_name": str(item["field_name"]), "value": str(item["value"])}
+                )
+        cleaned["answers"] = norm_list
+    else:
+        cleaned["answers"] = []
+    if cleaned.get("spoken_readback") is None:
+        cleaned["spoken_readback"] = ""
+    return cleaned
+
+
 class RegisterIntakeEngine:
-    """Voice-driven dynamic custom-register intake engine (FR-7.2) with Gemini + offline fallback."""
+    """Voice-driven dynamic custom-register intake engine (FR-7.2) with Groq, Gemini & offline fallback."""
 
     def __init__(
         self,
         api_key: Optional[str] = None,
         model: Optional[str] = None,
+        groq_api_key: Optional[str] = None,
+        groq_model: Optional[str] = None,
+        groq_base_url: Optional[str] = None,
+        llm_provider: Optional[str] = None,
+        timeout_s: float = 6.0,
+        http_client: Optional[httpx.AsyncClient] = None,
     ) -> None:
         settings = get_settings()
+        self.llm_provider = (llm_provider if llm_provider is not None else settings.llm_provider).strip().lower()
         self.api_key = api_key if api_key is not None else settings.gemini_api_key
         self.model = model or settings.gemini_model
+        self.groq_api_key = groq_api_key if groq_api_key is not None else settings.groq_api_key
+        self.groq_model = groq_model or settings.groq_model
+        self.groq_base_url = (groq_base_url or settings.groq_base_url).rstrip("/")
+        self.timeout_s = timeout_s
         self._client: Any = None
+        self._groq_client: Optional[httpx.AsyncClient] = http_client
 
     def _get_client(self) -> Any:
-        if self._client is None and self.api_key:
+        if self._client is None and is_live_api_key(self.api_key):
             from google import genai
 
-            self._client = genai.Client(api_key=self.api_key)
+            self._client = genai.Client(api_key=self.api_key.strip())
         return self._client
+
+    def _get_groq_client(self) -> Optional[httpx.AsyncClient]:
+        if self._groq_client is None and is_live_api_key(self.groq_api_key):
+            self._groq_client = httpx.AsyncClient(
+                base_url=self.groq_base_url,
+                headers={
+                    "Authorization": f"Bearer {self.groq_api_key.strip()}",
+                    "Content-Type": "application/json",
+                },
+                timeout=self.timeout_s,
+            )
+        return self._groq_client
+
+    async def _extract_with_groq(
+        self,
+        utterance: str,
+        register: CustomRegister,
+        current_draft: RegisterIntakeDraft,
+        language_code: LanguageCode | str,
+    ) -> Optional[GeminiRegisterIntakePayload]:
+        client = self._get_groq_client()
+        if client is None:
+            return None
+
+        prompt = json.dumps(
+            {
+                "today": date.today().isoformat(),
+                "active_language": language_code,
+                "register_name": register.name,
+                "register_fields": [
+                    {"field_name": f.field_name, "field_type": f.field_type}
+                    for f in register.fields
+                ],
+                "current_draft": current_draft.model_dump(),
+                "asha_utterance": utterance,
+            },
+            ensure_ascii=False,
+        )
+        body: dict[str, Any] = {
+            "model": self.groq_model,
+            "messages": [
+                {"role": "system", "content": GROQ_REGISTER_INTAKE_SYSTEM_INSTRUCTION},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": 0.1,
+            "max_tokens": 350,
+            "response_format": {"type": "json_object"},
+            **_groq_reasoning_extra(self.groq_model),
+        }
+        try:
+            response = await client.post("/chat/completions", json=body)
+            response.raise_for_status()
+            data = response.json()
+            content = data["choices"][0]["message"]["content"]
+            if content:
+                parsed = json.loads(_strip_json_fences(content))
+                if isinstance(parsed, dict):
+                    return GeminiRegisterIntakePayload.model_validate(
+                        _sanitize_register_intake_payload(parsed)
+                    )
+        except Exception as exc:  # pragma: no cover
+            logger.warning("Groq register intake failed (%s); falling back offline.", exc)
+        return None
+
+    async def _extract_with_llm(
+        self,
+        utterance: str,
+        register: CustomRegister,
+        current_draft: RegisterIntakeDraft,
+        language_code: LanguageCode | str,
+    ) -> Optional[GeminiRegisterIntakePayload]:
+        if self.llm_provider == "groq" and is_live_api_key(self.groq_api_key):
+            return await self._extract_with_groq(utterance, register, current_draft, language_code)
+        if self.llm_provider == "gemini" and is_live_api_key(self.api_key):
+            return await self._extract_with_gemini(utterance, register, current_draft, language_code)
+        if is_live_api_key(self.groq_api_key):
+            return await self._extract_with_groq(utterance, register, current_draft, language_code)
+        if is_live_api_key(self.api_key):
+            return await self._extract_with_gemini(utterance, register, current_draft, language_code)
+        return None
 
     async def _extract_with_gemini(
         self,
@@ -1276,7 +1649,7 @@ class RegisterIntakeEngine:
         working = current_draft.model_copy(deep=True)
         field_type_map = {f.field_name.lower(): (f.field_name, f.field_type) for f in register.fields}
 
-        gemini_payload = await self._extract_with_gemini(
+        gemini_payload = await self._extract_with_llm(
             utterance=cleaned,
             register=register,
             current_draft=working,

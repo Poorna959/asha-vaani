@@ -16,11 +16,15 @@
         "te": "ప్రమాద లక్షణం: గర్భధారణలో రక్తస్రావం. దయచేసి వెంటనే పీహెచ్‌సీకి (PHC) తరలించండి. రికార్డు ఫ్లాగ్ చేయబడింది."
       },
       "keywords": {
-        "en": ["bleeding", "blood loss", "spotting blood", "hemorrhage", "vaginal bleed"],
-        "hi": ["रक्तस्राव", "खून बहना", "खून आ रहा", "bliding", "khoon nikalna", "khoon"],
-        "kn": ["ರಕ್ತಸ್ರಾವ", "ರಕ್ತ ಬರುತ್ತಿದೆ", "rakthasrava", "raktha hogthide"],
-        "ta": ["ரத்தப்போக்கு", "ரத்தம்", "rathapokku", "rathom"],
-        "te": ["రక్తస్రావం", "రక్తం కారుతోంది", "rakthasravam", "raktham"]
+        "en": [
+          "bleeding", "blood loss", "spotting blood", "hemorrhage", "vaginal bleed",
+          "vaginal bleeding", "heavy bleeding", "bleeding heavily", "bleeding in pregnancy",
+          "blood discharge", "bliding", "bliding ho rahi"
+        ],
+        "hi": ["रक्तस्राव", "खून बहना", "खून आ रहा", "ब्लिडिंग", "ब्लीडिंग", "bliding", "khoon nikalna", "khoon"],
+        "kn": ["ರಕ್ತಸ್ರಾವ", "ರಕ್ತ ಬರುತ್ತಿದೆ", "ಬ್ಲೀಡಿಂಗ್", "rakthasrava", "raktha hogthide"],
+        "ta": ["ரத்தப்போக்கு", "ரத்தம்", "ப்ளீடிங்", "rathapokku", "rathom"],
+        "te": ["రక్తస్రావం", "రక్తం కారుతోంది", "బ్లీడింగ్", "rakthasravam", "raktham"]
       }
     },
     {
@@ -36,7 +40,7 @@
         "te": "ప్రమాద లక్షణం: ఫిట్స్ లేదా మూర్ఛ. దయచేసి వెంటనే PHC కి తరలించండి, అవసరమైతే 108 కు కాల్ చేయండి. రికార్డు ఫ్లాగ్ చేయబడింది."
       },
       "keywords": {
-        "en": ["convulsion", "convulsions", "fits", "seizure", "seizures", "fit aa raha"],
+        "en": ["convulsion", "convulsions", "fits", "having fits", "seizure", "seizures", "fit aa raha", "konvalshan"],
         "hi": ["दौरे", "मिर्गी", "फिट्स", "jhatke aana", "fit"],
         "kn": ["ಫಿಟ್ಸ್", "ಮೂರ್ಛೆ", "ಸೆಳೆತ", "fits", "moorche"],
         "ta": ["வலிப்பு", "valippu", "seizure"],
@@ -56,9 +60,17 @@
         "te": "ప్రమాద లక్షణం: తీవ్ర తలనొప్పి లేదా కళ్ళు మసకబారడం. దయచేసి వెంటనే PHC కి తరలించండి. రికార్డు ఫ్లాగ్ చేయబడింది."
       },
       "keywords": {
-        "en": ["severe headache", "blurred vision", "blur vision", "double vision", "tez sirdard", "headache with blurred vision"],
-        "hi": ["तेज सिरदर्द", "धुंधला दिखना", "dhundhla", "sir phat raha", "sir dard tez"],
-        "kn": ["ತೀವ್ರ ತಲೆನೋವು", "ಕಣ್ಣು ಮಂಜಾಗುವುದು", "teevra tale novu", "tumba tale novu", "kannu manju"],
+        "en": [
+          "severe headache", "heavy headache", "bad headache", "severe head ache",
+          "blurred vision", "blurry vision", "blur vision", "blurring vision",
+          "vision blurred", "vision blur", "blood vision", "double vision",
+          "cannot see clearly", "can't see clearly", "tez sirdard",
+          "headache with blurred vision", "headache and blurred vision",
+          "headache and blurry vision", "siviyar hedek", "siviyar hedak",
+          "blard vishan", "blad vishan", "blard vijan"
+        ],
+        "hi": ["तेज सिरदर्द", "धुंधला दिखना", "सिवियर हेडेक", "ब्लर्ड विजन", "ब्लर्ड विज़न", "dhundhla", "sir phat raha", "sir dard tez"],
+        "kn": ["ತೀವ್ರ ತಲೆನೋವು", "ಕಣ್ಣು ಮಂಜಾಗುವುದು", "ಸಿವಿಯರ್ ಹೆಡೆಕ್", "ಸಿವಿಯರ್ ಹೆಡೇಕ್", "ಬ್ಲರ್ಡ್ ವಿಷನ್", "ಬ್ಲಡ್ ವಿಷನ್", "teevra tale novu", "tumba tale novu", "kannu manju"],
         "ta": ["கடுமையான தலைவலி", "பார்வை மங்கல்", "kadumaiyana thalai vali", "parvai mangal"],
         "te": ["తీవ్ర తలనొప్పి", "కళ్ళు మసకబారడం", "teevra talanopi", "kallu masaka"]
       }
@@ -76,9 +88,13 @@
         "te": "ప్రమాద లక్షణం: గర్భధారణలో తీవ్ర జ్వరం. దయచేసి వెంటనే PHC కి తరలించండి. రికార్డు ఫ్లాగ్ చేయబడింది."
       },
       "keywords": {
-        "en": ["high fever", "severe fever", "tez bukhar", "heavy fever"],
-        "hi": ["तेज बुखार", "बुखार तेज", "tez bukhar", "bahut bukhar", "taptap"],
-        "kn": ["ತೀವ್ರ ಜ್ವರ", "ಹೆಚ್ಚು ಜ್ವರ", "teevra jwara", "tumba jwara"],
+        "en": [
+          "high fever", "severe fever", "very high fever", "tez bukhar", "heavy fever",
+          "high temperature", "fever 102", "fever 103", "fever 104", "103 fever", "104 fever",
+          "hai fivar", "hai phivar"
+        ],
+        "hi": ["तेज बुखार", "बुखार तेज", "हाई फीवर", "tez bukhar", "bahut bukhar", "taptap"],
+        "kn": ["ತೀವ್ರ ಜ್ವರ", "ಹೆಚ್ಚು ಜ್ವರ", "ಹೈ ಫೀವರ್", "teevra jwara", "tumba jwara"],
         "ta": ["அதிக காய்ச்சல்", "கடுமையான காய்ச்சல்", "athiga kaichal"],
         "te": ["తీవ్ర జ్వరం", "ఎక్కువ జ్వరం", "teevra jwaram", "ekkuva jwaram"]
       }
@@ -96,7 +112,11 @@
         "te": "ప్రమాద లక్షణం: బిడ్డ కదలికలు తగ్గాయి లేదా లేవు. దయచేసి వెంటనే PHC కి తరలించండి. రికార్డు ఫ్లాగ్ చేయబడింది."
       },
       "keywords": {
-        "en": ["no baby movement", "reduced movement", "baby not moving", "halchal band", "no kicking"],
+        "en": [
+          "no baby movement", "reduced movement", "decreased movement", "less movement",
+          "baby not moving", "baby is not moving", "stopped moving", "no movement",
+          "halchal band", "no kicking", "bebi not muving"
+        ],
         "hi": ["बच्चे की हलचल नहीं", "हलचल कम", "bacha hil nahi raha", "no movement"],
         "kn": ["ಮಗು ಕದಲುತಿಲ್ಲ", "ಚಲನವಲನ ಇಲ್ಲ", "magu kadaluttilla", "chalanavalana illa"],
         "ta": ["குழந்தை அசையவில்லை", "அசைவு இல்லை", "kuzhandhai asaiyavillai"],
@@ -116,7 +136,7 @@
         "te": "ప్రమాద లక్షణం: ఉమ్మనీరు పోతోంది. దయచేసి వెంటనే PHC కి తరలించండి. రికార్డు ఫ్లాగ్ చేయబడింది."
       },
       "keywords": {
-        "en": ["water broke", "water breaking", "leaking fluid", "amniotic fluid", "pani nikal raha"],
+        "en": ["water broke", "water breaking", "water bag broke", "water leaking", "leaking fluid", "fluid leaking", "amniotic fluid", "pani nikal raha"],
         "hi": ["पानी छूटना", "पानी की थैली", "pani beh raha", "water break"],
         "kn": ["ನೀರು ಹೋಗುತ್ತಿದೆ", "ನೀರಿನ ಚೀಲ ಒಡೆದಿದೆ", "neeru hoguttide"],
         "ta": ["பனிக்குடம் உடைந்தது", "நீர் கசிகிறது", "panikudam"],
@@ -136,9 +156,15 @@
         "te": "ప్రమాద లక్షణం: నవజాత శిశువుకు తీవ్ర జ్వరం లేదా శరీరం చల్లబడింది. దయచేసి శిశువును వెంటనే PHC కి తరలించండి. రికార్డు ఫ్లాగ్ చేయబడింది."
       },
       "keywords": {
-        "en": ["newborn fever", "newborn high fever", "high fever in a newborn", "high fever in newborn", "baby fever", "baby high fever", "body cold", "cold body", "baby temperature high"],
-        "hi": ["बच्चे को बुखार", "नवजात को बुखार", "नवजात को तेज बुखार", "शरीर ठंडा", "bacha thanda pad gaya", "bacha garam", "body garam"],
-        "kn": ["ಮಗುವಿಗೆ ಜ್ವರ", "ಮೈ ತಣ್ಣಗಾಗಿದೆ", "maguvige jwara", "mai tannagagide"],
+        "en": [
+          "newborn fever", "newborn high fever", "high fever in a newborn", "high fever in newborn",
+          "newborn has fever", "newborn has high fever", "baby fever", "baby high fever",
+          "baby has fever", "baby has a fever", "baby has high fever", "bebi fivar",
+          "bebi haiz a fivar", "bebi fivar ide", "body cold", "cold body", "cold to touch",
+          "very cold baby", "baby temperature high"
+        ],
+        "hi": ["बच्चे को बुखार", "नवजात को बुखार", "नवजात को तेज बुखार", "बेबी फीवर", "शरीर ठंडा", "bacha thanda pad gaya", "bacha garam", "body garam"],
+        "kn": ["ಮಗುವಿಗೆ ಜ್ವರ", "ಬೇಬಿ ಫೀವರ್", "ಬೇಬಿಗೆ ಜ್ವರ", "ಮೈ ತಣ್ಣಗಾಗಿದೆ", "maguvige jwara", "mai tannagagide"],
         "ta": ["குழந்தைக்கு காய்ச்சல்", "உடல் குளிர்ந்துள்ளது", "kuzhandhaikku kaichal"],
         "te": ["శిశువుకు జ్వరం", "శరీరం చల్లబడింది", "sisuvuku jwaram", "challa badindi"]
       }
@@ -156,9 +182,13 @@
         "te": "ప్రమాద లక్షణం: శిశువు వేగంగా శ్వాస తీసుకుంటోంది. దయచేసి శిశువును వెంటనే PHC కి తరలించండి. రికార్డు ఫ్లాగ్ చేయబడింది."
       },
       "keywords": {
-        "en": ["fast breathing", "chest indrawing", "chest in-drawing", "difficulty breathing", "pant", "gasping"],
-        "hi": ["तेज सांस", "छाती धंसना", "saans lene me takleef", "chhati dhasna", "saans tez"],
-        "kn": ["ವೇಗದ ಉಸಿರಾಟ", "ಎದೆ ಕುಸಿಯುತ್ತಿದೆ", "usirata vega", "ede kusiyuttide"],
+        "en": [
+          "fast breathing", "rapid breathing", "breathing fast", "chest indrawing",
+          "chest in-drawing", "chest drawing in", "difficulty breathing", "breathing difficulty",
+          "trouble breathing", "hard to breathe", "pant", "gasping", "fast briding"
+        ],
+        "hi": ["तेज सांस", "छाती धंसना", "फास्ट ब्रीदिंग", "saans lene me takleef", "chhati dhasna", "saans tez"],
+        "kn": ["ವೇಗದ ಉಸಿರಾಟ", "ಎದೆ ಕುಸಿಯುತ್ತಿದೆ", "ಫಾಸ್ಟ್ ಬ್ರೀದಿಂಗ್", "usirata vega", "ede kusiyuttide"],
         "ta": ["வேகமாக மூச்சு", "மார்பு உள்வாங்குதல்", "moochu viduvathil siramam"],
         "te": ["వేగంగా శ్వాస", "శ్వాస తీసుకోవడంలో కష్టం", "swasa vegam"]
       }
@@ -176,7 +206,11 @@
         "te": "ప్రమాద లక్షణం: శిశువు పాలు తాగలేకపోతోంది. దయచేసి శిశువును వెంటనే PHC కి తరలించండి. రికార్డు ఫ్లాగ్ చేయబడింది."
       },
       "keywords": {
-        "en": ["cannot feed", "stopped sucking", "unable to feed", "not drinking milk", "doodh nahi pee raha"],
+        "en": [
+          "cannot feed", "stopped sucking", "unable to feed", "unable to suck",
+          "not feeding", "poor feeding", "refusing to feed", "refusing milk",
+          "not sucking", "not drinking milk", "doodh nahi pee raha"
+        ],
         "hi": ["दूध नहीं पी रहा", "स्तनपान नहीं कर रहा", "doodh band", "doodh nahi peeta"],
         "kn": ["ಹಾಲು ಕುಡಿಯುತ್ತಿಲ್ಲ", "ಹಾಲು ಹೀರುತ್ತಿಲ್ಲ", "haalu kudiyuttilla"],
         "ta": ["பால் குடிக்கவில்லை", "தாய்ப்பால் குடிக்க மறுக்கிறது", "paal kudikkavillai"],
@@ -196,7 +230,11 @@
         "te": "ప్రమాద లక్షణం: శిశువు తీవ్ర అలసటగా లేదా స్పృహ లేకుండా ఉంది. దయచేసి శిశువును వెంటనే PHC కి తరలించండి. రికార్డు ఫ్లాగ్ చేయబడింది."
       },
       "keywords": {
-        "en": ["lethargic", "unconscious", "floppy baby", "unresponsive", "very weak baby", "sust bacha"],
+        "en": [
+          "lethargic", "lethargy", "unconscious", "floppy baby", "limp baby",
+          "unresponsive", "not responding", "not waking up", "very drowsy",
+          "drowsy baby", "very weak baby", "sust bacha"
+        ],
         "hi": ["सुस्त बच्चा", "बेहोश", "हलचल नहीं", "sust", "bejan"],
         "kn": ["ತೀರಾ ಸುಸ್ತು", "ಪ್ರಜ್ಞೆ ಇಲ್ಲ", "ಚೇತನವಿಲ್ಲ", "tumba sustu"],
         "ta": ["மிகவும் சோர்வு", "சுயநினைவில்லை", "asaiyavillai"],
@@ -216,7 +254,7 @@
         "te": "ప్రమాద లక్షణం: శిశువుకు ఫిట్స్ వస్తున్నాయి. దయచేసి వెంటనే PHC కి తరలించండి, అవసరమైతే 108 కు కాల్ చేయండి. రికార్డు ఫ్లాగ్ చేయబడింది."
       },
       "keywords": {
-        "en": ["newborn fits", "baby convulsions", "baby twitching", "jhatke baby"],
+        "en": ["newborn fits", "baby fits", "baby is having fits", "baby convulsions", "newborn convulsions", "baby seizures", "newborn seizures", "baby twitching", "jhatke baby", "bebi fits"],
         "hi": ["नवजात को दौरे", "झटके आना", "doure", "bachhe ko fit"],
         "kn": ["ಮಗುವಿಗೆ ಫಿಟ್ಸ್", "ನಡುಕ", "fits", "jhatka"],
         "ta": ["குழந்தைக்கு வலிப்பு", "நடுக்கம்", "valippu"],
@@ -236,9 +274,18 @@
         "te": "ప్రమాద లక్షణం: బొడ్డులో చీము లేదా ఎరుపు వ్యాపిస్తోంది. దయచేసి శిశువును వెంటనే PHC కి తరలించండి. రికార్డు ఫ్లాగ్ చేయబడింది."
       },
       "keywords": {
-        "en": ["umbilical pus", "pus from navel", "pus around navel", "foul smell cord", "redness navel", "peeb"],
-        "hi": ["नाभि से मवाद", "नाभि में पीब", "nabhi se pus", "nabhi lal", "peeb nikalna"],
-        "kn": ["ಹೊಕ್ಕುಳಲ್ಲಿ ಕೀವು", "ಹೊಕ್ಕುಳು ಕೆಂಪಾಗಿದೆ", "keevu baruttide", "hokkalu keevu", "hokkalu kempu"],
+        "en": [
+          "umbilical pus", "pus from navel", "pus around navel", "pus in navel", "pus on navel",
+          "pus near navel", "navel pus", "naval pus", "pus around naval", "pus from naval",
+          "navel redness", "naval redness", "redness around navel", "redness around naval",
+          "navel and redness", "naval and redness", "redness on navel", "red navel", "red naval",
+          "neval and rednes", "neval rednes", "pas araund neval", "belly button pus",
+          "belly button redness", "pus around belly button", "umbilical redness",
+          "umbilical discharge", "discharge from navel", "cord pus", "cord redness",
+          "foul smell cord", "redness navel", "peeb"
+        ],
+        "hi": ["नाभि से मवाद", "नाभि में पीब", "नाभि में मवाद", "नाभि लाल", "नाभि में लाली", "नेवल रेडनेस", "nabhi se pus", "nabhi lal", "peeb nikalna"],
+        "kn": ["ಹೊಕ್ಕುಳಲ್ಲಿ ಕೀವು", "ಹೊಕ್ಕುಳು ಕೆಂಪಾಗಿದೆ", "ನೇವಲ್ ಅಂಡ್ ರೆಡ್ನೆಸ್", "ನೇವಲ್ ರೆಡ್ನೆಸ್", "ಪಸ್ ಅರೌಂಡ್ ನೇವಲ್", "keevu baruttide", "hokkalu keevu", "hokkalu kempu"],
         "ta": ["தொப்புளில் சீழ்", "தொப்புள் சிவந்துவிட்டது", "thoppul seezh"],
         "te": ["బొడ్డులో చీము", "బొడ్డు ఎర్రబడటం", "boddu cheemu"]
       }

@@ -25,8 +25,11 @@ class Settings(BaseSettings):
     gnani_tts_ws_url: str = "wss://api.vachana.ai/api/v1/tts"
 
     # LLM Configuration
-    gemini_api_key: str = ""
     llm_provider: str = "gemini"
+    groq_api_key: str = ""
+    groq_model: str = "qwen/qwen3.8-27b"
+    groq_base_url: str = "https://api.groq.com/openai/v1"
+    gemini_api_key: str = ""
     gemini_model: str = "gemini-2.5-flash"
 
     # Audio & VAD Configuration

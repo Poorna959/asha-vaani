@@ -17,7 +17,7 @@ from app.pipeline.llm import ClinicalStateEngine, RuleBasedVisitExtractor
 
 
 def _build_test_app():
-    cfg = Settings(mock_gnani=True, gemini_api_key="", vad_silence_tail_ms=100)
+    cfg = Settings(mock_gnani=True, gemini_api_key="", groq_api_key="", vad_silence_tail_ms=100)
     return create_app(
         settings=cfg,
         db_path=":memory:",

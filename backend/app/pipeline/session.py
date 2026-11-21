@@ -80,6 +80,10 @@ class VoiceSessionOrchestrator:
         self.register_intake_engine = register_intake_engine or RegisterIntakeEngine(
             api_key=self.settings.gemini_api_key,
             model=self.settings.gemini_model,
+            groq_api_key=self.settings.groq_api_key,
+            groq_model=self.settings.groq_model,
+            groq_base_url=self.settings.groq_base_url,
+            llm_provider=self.settings.llm_provider,
         )
 
         self.stt: BaseSTTClient = stt_client or create_stt_client(self.settings)
@@ -407,6 +411,33 @@ class VoiceSessionOrchestrator:
             roster=roster_dicts,
         )
         llm_latency_ms = (time.perf_counter() - llm_start) * 1000.0
+
+        # 2b. Secondary deterministic danger-sign check on LLM-normalized English notes
+        # (catches English clinical phrases that streaming STT wrote phonetically in Indic script)
+        turn_notes = str(turn_result.extraction.extracted_fields.get("notes") or "").strip()
+        if turn_notes:
+            note_alerts = self.danger_detector.detect(
+                text=turn_notes,
+                language_code=active_lang,
+                visit_type=turn_result.updated_draft.visit_type or active_visit_type,
+            )
+            existing_codes = {a.code for a in danger_alerts}
+            new_note_alerts = [a for a in note_alerts if a.code not in existing_codes]
+            if new_note_alerts:
+                danger_alerts.extend(new_note_alerts)
+                for alert in new_note_alerts:
+                    if alert.code not in self.draft.danger_signs:
+                        self.draft.danger_signs.append(alert.code)
+                primary = danger_alerts[0]
+                await self._send_json(
+                    WsDangerEscalationEvent(
+                        code=primary.code,
+                        name=primary.canonical_name,
+                        priority=primary.priority,
+                        localized_instruction=primary.localized_instruction,
+                        all_alerts=danger_alerts,
+                    ).model_dump()
+                )
 
         # Preserve deterministically detected danger signs onto updated draft
         for code in self.draft.danger_signs:

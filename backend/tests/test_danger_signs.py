@@ -201,3 +201,64 @@ def test_danger_signs_catalog_contains_no_diagnosis_or_treatment_terms(detector:
             assert any(marker in script for marker in ("PHC", "पीएचसी", "పీహెచ్‌సీ")), (
                 f"Missing PHC referral instruction in {item['code']} ({lang})"
             )
+
+
+@pytest.mark.parametrize(
+    ("utterance", "expected_code", "language_code", "visit_type"),
+    [
+        # Exact user-reported live test cases (English + Kannada STT transliterations from real phone)
+        ("Sunita Devi ANC checkup, severe headache and blurred vision.", "DS_MAT_HEADACHE_VISION", "en-IN", "ANC"),
+        ("Newborn checkup, pus around navel and redness.", "DS_NB_UMBILICAL_PUS", "en-IN", "NEWBORN"),
+        ("ಸುನಿತಾ ದೇವಿ, ಎ ಎನ್ ಸಿ ಚೆಕಪ್, ಸಿವಿಯರ್ ಹೆಡೆಕ್ ಆ್ಯಂಡ್ ಬ್ಲರ್ಡ್ ವಿಷನ್.", "DS_MAT_HEADACHE_VISION", "kn-IN", "ANC"),
+        ("ಸುನಿತಾ ದೇವಿ, ಎ ಎನ್ ಸಿ ಚೆಕಪ್, ಸಿವಿಯರ್ ಹೆಡೇಕ್ ಆ್ಯಂಡ್ ಬ್ಲಡ್ ವಿಷನ್.", "DS_MAT_HEADACHE_VISION", "kn-IN", "ANC"),
+        ("ಫೋನ್ ಚೆಕ್ ಅಪ್ ಪ್ಲಸ್ ಅರೋನ್ ನೇವಲ್ ಅಂಡ್ ರೆಡ್ನೆಸ್.", "DS_NB_UMBILICAL_PUS", "kn-IN", "NEWBORN"),
+        ("ಬೇಬಿ ಫೀವರ್ ಇದೆ.", "DS_NB_HIGH_FEVER_COLD", "kn-IN", "NEWBORN"),
+        ("ਬੇਬੀ ਹੈਜ਼ ਅ ਫੀਵਰ।", "DS_NB_HIGH_FEVER_COLD", "indic-auto", "NEWBORN"),
+        # Hindi transliterations of English clinical danger signs
+        ("सुनीता देवी को सिवियर हेडेक और ब्लर्ड विज़न है", "DS_MAT_HEADACHE_VISION", "hi-IN", "ANC"),
+        ("सुनीता देवी को प्रेगनेंसी में ब्लीडिंग हो रही है", "DS_MAT_BLEEDING", "hi-IN", "ANC"),
+        ("बच्चे को हाई फीवर है", "DS_NB_HIGH_FEVER_COLD", "hi-IN", "NEWBORN"),
+        ("नवजात को फास्ट ब्रीदिंग हो रही है", "DS_NB_FAST_BREATHING", "hi-IN", "NEWBORN"),
+        ("नवजात की नाभि में लाली और मवाद है", "DS_NB_UMBILICAL_PUS", "hi-IN", "NEWBORN"),
+        # Common English STT phonetic variations & synonyms
+        ("Newborn checkup, pus around naval and redness", "DS_NB_UMBILICAL_PUS", "en-IN", "NEWBORN"),
+        ("Baby belly button pus and redness", "DS_NB_UMBILICAL_PUS", "en-IN", "NEWBORN"),
+        ("Sunita Devi has blurry vision and bad headache", "DS_MAT_HEADACHE_VISION", "en-IN", "ANC"),
+        ("Mother cannot see clearly and has heavy headache", "DS_MAT_HEADACHE_VISION", "en-IN", "ANC"),
+        ("Pregnant mother has fever 103 since night", "DS_MAT_HIGH_FEVER", "en-IN", "ANC"),
+        ("Water bag broke and fluid leaking", "DS_MAT_WATER_BREAKING", "en-IN", "ANC"),
+        ("Baby is not moving since morning", "DS_MAT_NO_FETAL_MOVEMENT", "en-IN", "ANC"),
+        ("Baby is refusing milk and not feeding", "DS_NB_POOR_FEEDING", "en-IN", "NEWBORN"),
+        ("Baby is very drowsy and not waking up", "DS_NB_LETHARGY", "en-IN", "NEWBORN"),
+        ("Baby is having seizures and twitching", "DS_NB_CONVULSIONS", "en-IN", "NEWBORN"),
+        ("Baby has rapid breathing and trouble breathing", "DS_NB_FAST_BREATHING", "en-IN", "NEWBORN"),
+    ],
+)
+def test_stt_transliteration_and_phonetic_edge_cases(
+    detector: DangerSignDetector,
+    utterance: str,
+    expected_code: str,
+    language_code: str,
+    visit_type: str,
+):
+    alerts = detector.detect(utterance, language_code=language_code, visit_type=visit_type)
+    codes = [a.code for a in alerts]
+    assert expected_code in codes, f"Expected {expected_code} for '{utterance}', got {codes}"
+
+
+@pytest.mark.parametrize(
+    "safe_utterance",
+    [
+        "Normal navel checkup, clean cord, no redness, no pus",
+        "No severe headache, no blurred vision, BP normal",
+        "ಸಿವಿಯರ್ ಹೆಡೆಕ್ ಇಲ್ಲ, ನಾರ್ಮಲ್ ಚೆಕಪ್",
+        "No umbilical pus, baby feeding well and active",
+        "Mild headache yesterday, feeling fine now",
+    ],
+)
+def test_edge_case_negations_and_normal_navel_do_not_false_trigger(
+    detector: DangerSignDetector,
+    safe_utterance: str,
+):
+    alerts = detector.detect(safe_utterance, language_code="indic-auto")
+    assert alerts == [], f"Unexpected false positive for '{safe_utterance}': {alerts}"

@@ -2,17 +2,24 @@
 
 from __future__ import annotations
 
+import json
 from datetime import date
 
+import httpx
 import pytest
 
+from app.config import Settings
 from app.db import Database
-from app.models import VisitDraft, VisitRecord
+from app.models import CustomRegister, RegisterField, RegisterIntakeDraft, VisitDraft, VisitRecord
 from app.pipeline.llm import (
     ClinicalStateEngine,
     GeminiVisitExtractor,
+    GroqVisitExtractor,
+    RegisterIntakeEngine,
     RuleBasedVisitExtractor,
+    create_visit_extractor,
     normalize_indic_numbers,
+    resolve_active_llm_info,
 )
 from app.services.followup import build_follow_up_create, compute_next_visit_plan
 from app.services.register_service import RegisterService
@@ -240,3 +247,158 @@ async def test_offline_name_matching_avoids_surname_conflict_and_captures_walkin
     )
     assert t3.updated_draft.beneficiary_id == "BEN-001"
     assert t3.updated_draft.beneficiary_name == "Sunita Devi"
+
+
+async def test_groq_visit_extractor_parses_structured_json_and_falls_back_on_error():
+    """Verify GroqVisitExtractor parses OpenAI-compatible JSON and falls back cleanly on 503."""
+    captured_requests: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content.decode("utf-8"))
+        captured_requests.append(body)
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "intent": "LOG_VISIT",
+                                    "beneficiary_id": "BEN-001",
+                                    "beneficiary_name": "Sunita Devi",
+                                    "visit_type": "ANC",
+                                    "weight_kg": 2.8,
+                                    "vaccinations_due": ["TT2"],
+                                    "next_visit_date": None,
+                                    "ifa_tablets_given": 30,
+                                    "notes": "ANC checkup",
+                                    "spoken_readback": "सुनीता देवी, वजन 2.8 किलो, 30 IFA गोली, TT2 बाकी है। क्या सेव कर लूं?",
+                                }
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    async with httpx.AsyncClient(
+        base_url="https://api.groq.com/openai/v1",
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        extractor = GroqVisitExtractor(
+            api_key="gsk_test_key",
+            model="qwen/qwen3.8-27b",
+            http_client=client,
+        )
+        payload = await extractor.extract(
+            utterance="सुनीता देवी, ANC चेकअप, वजन 2.8 kg, 30 IFA गोली, TT2 बाकी है।",
+            current_draft=VisitDraft(),
+            language_code="hi-IN",
+        )
+
+    assert payload.intent == "LOG_VISIT"
+    assert payload.beneficiary_id == "BEN-001"
+    assert payload.weight_kg == 2.8
+    assert payload.ifa_tablets_given == 30
+    assert payload.vaccinations_due == ["TT2"]
+    assert captured_requests[0]["model"] == "qwen/qwen3.8-27b"
+    assert captured_requests[0]["reasoning_effort"] == "none"
+
+    # Graceful offline fallback on 503 outage
+    def failing_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, json={"error": {"message": "Service unavailable"}})
+
+    async with httpx.AsyncClient(
+        base_url="https://api.groq.com/openai/v1",
+        transport=httpx.MockTransport(failing_handler),
+    ) as fail_client:
+        fallback_extractor = GroqVisitExtractor(
+            api_key="gsk_test_key",
+            model="qwen/qwen3.8-27b",
+            http_client=fail_client,
+        )
+        fb_payload = await fallback_extractor.extract(
+            utterance="Priya Sharma ANC checkup weight 52 kilo",
+            current_draft=VisitDraft(),
+            language_code="en-IN",
+        )
+    assert fb_payload.intent == "LOG_VISIT"
+    assert fb_payload.beneficiary_name == "Priya Sharma"
+    assert fb_payload.weight_kg == 52.0
+
+
+async def test_groq_register_intake_engine_and_provider_factory():
+    """Verify FR-7.2 RegisterIntakeEngine uses Groq and provider factory switches cleanly."""
+    register = CustomRegister(
+        id="REG-1",
+        name="Pregnancy Baseline",
+        fields=[
+            RegisterField(id="F-1", register_id="REG-1", field_name="Age", field_type="NUMBER"),
+            RegisterField(id="F-2", register_id="REG-1", field_name="Blood Group", field_type="TEXT"),
+        ],
+    )
+    draft = RegisterIntakeDraft(
+        register_id="REG-1",
+        register_name="Pregnancy Baseline",
+        expected_fields=["Age", "Blood Group"],
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "intent": "LOG_VISIT",
+                                    "patient_name": "Kavita Devi",
+                                    "category": "ANC",
+                                    "answers": [
+                                        {"field_name": "Age", "value": "24"},
+                                        {"field_name": "Blood Group", "value": "O+"},
+                                    ],
+                                    "spoken_readback": "कविता देवी, उम्र 24, ब्लड ग्रुप O+ दर्ज किया। क्या सेव कर लूं?",
+                                }
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    async with httpx.AsyncClient(
+        base_url="https://api.groq.com/openai/v1",
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        intake_engine = RegisterIntakeEngine(
+            llm_provider="groq",
+            groq_api_key="gsk_test_key",
+            groq_model="qwen/qwen3.8-27b",
+            http_client=client,
+        )
+        turn = await intake_engine.process_turn(
+            utterance="कविता देवी, उम्र 24 साल, ब्लड ग्रुप O+",
+            register=register,
+            current_draft=draft,
+            language_code="hi-IN",
+        )
+
+    assert turn.updated_draft.patient_name == "Kavita Devi"
+    assert turn.updated_draft.field_answers == {"Age": 24, "Blood Group": "O+"}
+    assert turn.status == "AWAITING_CONFIRMATION"
+
+    # Provider selection checks
+    groq_cfg = Settings(llm_provider="groq", groq_api_key="gsk_live", gemini_api_key="")
+    assert resolve_active_llm_info(groq_cfg) == ("groq", "qwen/qwen3.8-27b")
+    assert isinstance(create_visit_extractor(groq_cfg), GroqVisitExtractor)
+
+    gemini_cfg = Settings(llm_provider="gemini", groq_api_key="", gemini_api_key="AIza_live")
+    assert resolve_active_llm_info(gemini_cfg) == ("gemini", "gemini-2.5-flash")
+    assert isinstance(create_visit_extractor(gemini_cfg), GeminiVisitExtractor)
+
+    offline_cfg = Settings(llm_provider="groq", groq_api_key="", gemini_api_key="")
+    assert resolve_active_llm_info(offline_cfg)[0] == "offline_fallback"
+    assert isinstance(create_visit_extractor(offline_cfg), RuleBasedVisitExtractor)

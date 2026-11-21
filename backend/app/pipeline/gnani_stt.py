@@ -108,32 +108,24 @@ class GnaniPrismaSTTClient(BaseSTTClient):
         self._ws: Any = None
         self._last_audio_ts: float = 0.0
         self._closed: bool = False
+        self._connect_lock: asyncio.Lock = asyncio.Lock()
+        self._ws_ready: asyncio.Event = asyncio.Event()
 
-    async def connect(
-        self,
-        language_code: LanguageCode | str = "indic-auto",
-        keyterms: Optional[list[str]] = None,
-    ) -> None:
+    async def _open_socket(self) -> None:
         import websockets
-
-        self.language_code = str(language_code)
-        if keyterms is not None:
-            self.keyterms = list(keyterms)
-        self._closed = False
 
         headers = {
             "X-API-Key-ID": self.api_key,
             "language_code": self.language_code,
             "model": self.model,
         }
-        self._ws = await websockets.connect(
+        ws = await websockets.connect(
             self.ws_url,
             additional_headers=headers,
             max_size=4 * 1024 * 1024,
         )
-
         # Send initial Prisma v3.0 keyterm & audio configuration control frame
-        await self._ws.send(
+        await ws.send(
             json.dumps(
                 {
                     "type": "update_settings",
@@ -145,12 +137,50 @@ class GnaniPrismaSTTClient(BaseSTTClient):
                 }
             )
         )
+        self._ws = ws
+        self._ws_ready.set()
+
+    async def _reconnect(self) -> None:
+        async with self._connect_lock:
+            if self._closed:
+                return
+            if self._ws is not None:
+                try:
+                    await self._ws.close()
+                except Exception:
+                    pass
+                self._ws = None
+            self._ws_ready.clear()
+            await self._open_socket()
+
+    async def connect(
+        self,
+        language_code: LanguageCode | str = "indic-auto",
+        keyterms: Optional[list[str]] = None,
+    ) -> None:
+        self.language_code = str(language_code)
+        if keyterms is not None:
+            self.keyterms = list(keyterms)
+        self._closed = False
+        async with self._connect_lock:
+            await self._open_socket()
 
     async def send_audio(self, pcm_bytes: bytes) -> None:
-        if self._ws is None or self._closed or not pcm_bytes:
+        if self._closed or not pcm_bytes:
             return
         self._last_audio_ts = time.perf_counter()
-        await self._ws.send(pcm_bytes)
+        if self._ws is None:
+            await self._reconnect()
+        try:
+            if self._ws is not None:
+                await self._ws.send(pcm_bytes)
+        except Exception as exc:
+            if self._closed:
+                return
+            logger.info("Prisma STT socket reconnecting after idle/close (%s)", exc)
+            await self._reconnect()
+            if self._ws is not None:
+                await self._ws.send(pcm_bytes)
 
     async def finalize_turn(self) -> None:
         if self._ws is None or self._closed:
@@ -164,66 +194,98 @@ class GnaniPrismaSTTClient(BaseSTTClient):
         self.language_code = str(language_code)
         if self._ws is None or self._closed:
             return
-        await self._ws.send(
-            json.dumps(
-                {
-                    "type": "update_settings",
-                    "language_code": self.language_code,
-                    "keyterms": self.keyterms,
-                }
+        try:
+            await self._ws.send(
+                json.dumps(
+                    {
+                        "type": "update_settings",
+                        "language_code": self.language_code,
+                        "keyterms": self.keyterms,
+                    }
+                )
             )
-        )
+        except Exception:
+            # Socket closed while idle; next send_audio will reconnect with updated language_code
+            self._ws = None
+            self._ws_ready.clear()
 
     async def transcripts(self) -> AsyncIterator[TranscriptEvent]:
-        if self._ws is None:
-            return
-        try:
-            async for raw_message in self._ws:
-                if isinstance(raw_message, bytes):
-                    continue
-                try:
-                    data = json.loads(raw_message)
-                except json.JSONDecodeError:
-                    continue
+        while not self._closed:
+            await self._ws_ready.wait()
+            if self._closed:
+                break
+            current_ws = self._ws
+            if current_ws is None:
+                self._ws_ready.clear()
+                continue
+            should_exit = False
+            try:
+                async for raw_message in current_ws:
+                    if isinstance(raw_message, bytes):
+                        continue
+                    try:
+                        data = json.loads(raw_message)
+                    except json.JSONDecodeError:
+                        continue
 
-                text = (
-                    data.get("transcript")
-                    or data.get("text")
-                    or data.get("asr_text")
-                    or ""
-                ).strip()
-                if not text:
-                    continue
+                    text = (
+                        data.get("transcript")
+                        or data.get("text")
+                        or data.get("asr_text")
+                        or ""
+                    ).strip()
+                    if not text:
+                        continue
 
-                is_final = bool(
-                    data.get("is_final")
-                    if "is_final" in data
-                    else data.get("final", data.get("type") == "final_transcript")
-                )
-                detected_lang = str(
-                    data.get("language_code") or data.get("language") or self.language_code
-                )
-                confidence = float(data.get("confidence", 1.0))
-                latency_ms = (
-                    (time.perf_counter() - self._last_audio_ts) * 1000.0
-                    if self._last_audio_ts
-                    else 0.0
-                )
-                yield TranscriptEvent(
-                    text=text,
-                    is_final=is_final,
-                    language=detected_lang,
-                    confidence=confidence,
-                    latency_ms=round(latency_ms, 1),
-                )
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            if not self._closed:
-                logger.warning("Prisma STT receive stream ended: %s", exc)
+                    is_final = bool(
+                        data.get("is_final")
+                        if "is_final" in data
+                        else data.get("final", data.get("type") == "final_transcript")
+                    )
+                    detected_lang = str(
+                        data.get("detected_language_code")
+                        or data.get("language_code")
+                        or data.get("language")
+                        or self.language_code
+                    )
+                    confidence = float(data.get("confidence", 1.0))
+                    reported_latency = data.get("latency")
+                    if isinstance(reported_latency, (int, float)) and reported_latency >= 0:
+                        latency_ms = float(reported_latency)
+                    else:
+                        latency_ms = (
+                            (time.perf_counter() - self._last_audio_ts) * 1000.0
+                            if self._last_audio_ts
+                            else 0.0
+                        )
+                    yield TranscriptEvent(
+                        text=text,
+                        is_final=is_final,
+                        language=detected_lang,
+                        confidence=confidence,
+                        latency_ms=round(latency_ms, 1),
+                    )
+                # Normal WebSocket closure (1000 OK without idle timeout) ends the stream cleanly.
+                close_code = getattr(current_ws, "close_code", None)
+                close_reason = str(getattr(current_ws, "close_reason", "") or "").lower()
+                if close_code == 1000 and "idle" not in close_reason:
+                    should_exit = True
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                if not self._closed:
+                    logger.info("Prisma STT receive stream ended (%s); awaiting reconnect", exc)
+            finally:
+                if self._ws is current_ws:
+                    self._ws = None
+                    self._ws_ready.clear()
+            if should_exit or self._closed:
+                break
+            await asyncio.sleep(0.05)
 
     async def close(self) -> None:
         self._closed = True
+        self._ws_ready.set()
         if self._ws is not None:
             try:
                 await self._ws.close()

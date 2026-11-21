@@ -76,7 +76,7 @@ def test_adaptive_vad_ignores_steady_noise_and_detects_speech_endpoints():
 
 
 def test_health_and_danger_signs_endpoints():
-    cfg = Settings(mock_gnani=True, gemini_api_key="")
+    cfg = Settings(mock_gnani=True, gemini_api_key="", groq_api_key="")
     app = create_app(
         settings=cfg,
         db_path=":memory:",
@@ -98,7 +98,7 @@ def test_health_and_danger_signs_endpoints():
 
 def test_full_3_turn_voice_visit_correction_and_persistence_over_ws():
     """End-to-end: binary PCM -> STT -> extract -> read-back -> voice correction -> save -> follow-up."""
-    cfg = Settings(mock_gnani=True, gemini_api_key="", vad_silence_tail_ms=100)
+    cfg = Settings(mock_gnani=True, gemini_api_key="", groq_api_key="", vad_silence_tail_ms=100)
     app = create_app(
         settings=cfg,
         db_path=":memory:",
@@ -184,7 +184,7 @@ def test_full_3_turn_voice_visit_correction_and_persistence_over_ws():
 
 def test_instant_barge_in_cancels_active_tts_under_150ms():
     """Verify speaking mid-readback immediately triggers barge_in_clear within < 150ms."""
-    cfg = Settings(mock_gnani=True, gemini_api_key="", vad_silence_tail_ms=100)
+    cfg = Settings(mock_gnani=True, gemini_api_key="", groq_api_key="", vad_silence_tail_ms=100)
     app = create_app(
         settings=cfg,
         db_path=":memory:",
@@ -234,7 +234,7 @@ def test_instant_barge_in_cancels_active_tts_under_150ms():
 
 def test_danger_sign_escalation_and_patient_select_continuity_over_ws():
     """Verify FR-5 + FR-6 danger-sign lock and FR-7.6 pre-selected patient baseline continuity."""
-    cfg = Settings(mock_gnani=True, gemini_api_key="")
+    cfg = Settings(mock_gnani=True, gemini_api_key="", groq_api_key="")
     app = create_app(
         settings=cfg,
         db_path=":memory:",
@@ -287,7 +287,7 @@ def test_danger_sign_escalation_and_patient_select_continuity_over_ws():
 
 def test_multi_house_session_clears_patient_context_after_save():
     """Verify saving a pre-selected patient visit clears patient_context for the next house."""
-    cfg = Settings(mock_gnani=True, gemini_api_key="")
+    cfg = Settings(mock_gnani=True, gemini_api_key="", groq_api_key="")
     app = create_app(
         settings=cfg,
         db_path=":memory:",
@@ -324,7 +324,7 @@ def test_multi_house_session_clears_patient_context_after_save():
 
 def test_fr72_custom_register_voice_intake_correction_save_and_safety_over_ws():
     """Verify FR-7.2: voice onboarding into custom register dynamic fields, diff correction, save, search & safety."""
-    cfg = Settings(mock_gnani=True, gemini_api_key="")
+    cfg = Settings(mock_gnani=True, gemini_api_key="", groq_api_key="")
     app = create_app(
         settings=cfg,
         db_path=":memory:",

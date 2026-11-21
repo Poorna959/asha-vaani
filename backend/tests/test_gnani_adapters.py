@@ -225,3 +225,57 @@ def test_adapter_factories_respect_mock_gnani_flag():
     live_cfg = Settings(mock_gnani=False, gnani_api_key="live-key")
     assert isinstance(create_stt_client(live_cfg), GnaniPrismaSTTClient)
     assert isinstance(create_tts_client(live_cfg), GnaniTimbreTTSClient)
+
+
+@pytest.mark.asyncio
+async def test_live_timbre_v3_nested_data_audio_and_lakshmi_voice():
+    """Verify Timbre v3.0 nested {"type":"audio","data":{"audio":"..."}} + {"type":"complete"} format."""
+    captured_requests: list[dict] = []
+    pcm_chunk_1 = b"\x01\x00\x02\x00" * 32
+    pcm_chunk_2 = b"\x03\x00\x04\x00" * 32
+
+    async def fake_timbre_v3_server(ws):
+        async for msg in ws:
+            captured_requests.append(json.loads(msg))
+            await ws.send(json.dumps({"type": "start", "message": "Streaming started"}))
+            await ws.send(
+                json.dumps(
+                    {
+                        "type": "audio",
+                        "data": {
+                            "chunk_index": 1,
+                            "audio": base64.b64encode(pcm_chunk_1).decode("ascii"),
+                            "is_final": False,
+                        },
+                    }
+                )
+            )
+            await ws.send(
+                json.dumps(
+                    {
+                        "type": "audio",
+                        "data": {
+                            "chunk_index": 2,
+                            "audio": base64.b64encode(pcm_chunk_2).decode("ascii"),
+                            "is_final": False,
+                        },
+                    }
+                )
+            )
+            await ws.send(
+                json.dumps(
+                    {
+                        "type": "complete",
+                        "data": {"chunk_index": 3, "audio": "", "is_final": True},
+                    }
+                )
+            )
+
+    async with websockets.serve(fake_timbre_v3_server, "127.0.0.1", 0) as server:
+        port = server.sockets[0].getsockname()[1]
+        client = GnaniTimbreTTSClient(api_key="live-key", ws_url=f"ws://127.0.0.1:{port}")
+        chunks = [c async for c in client.synthesize_stream("Weight 2.8 kilo.", language_code="kn-IN")]
+
+    assert captured_requests[0]["voice"] == "Lakshmi"
+    assert captured_requests[0]["language"] == "kn-IN"
+    assert chunks == [pcm_chunk_1, pcm_chunk_2]

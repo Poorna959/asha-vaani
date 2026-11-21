@@ -29,11 +29,11 @@ logger = logging.getLogger(__name__)
 
 
 DEFAULT_TIMBRE_VOICES: dict[str, str] = {
-    "hi": "Nalini",
-    "kn": "Nalini",
-    "ta": "Nalini",
-    "te": "Nalini",
-    "en": "Nalini",
+    "hi": "Lakshmi",
+    "kn": "Lakshmi",
+    "ta": "Lakshmi",
+    "te": "Lakshmi",
+    "en": "Lakshmi",
 }
 
 BCP47_BY_SHORT_LANG: dict[str, str] = {
@@ -125,7 +125,7 @@ class GnaniTimbreTTSClient(BaseTTSClient):
 
         short_lang = resolve_short_language(str(language_code), text)
         target_bcp47 = BCP47_BY_SHORT_LANG.get(short_lang, "hi-IN")
-        selected_voice = voice or DEFAULT_TIMBRE_VOICES.get(short_lang, "Nalini")
+        selected_voice = voice or DEFAULT_TIMBRE_VOICES.get(short_lang, "Lakshmi")
 
         headers = {
             "X-API-Key-ID": self.api_key,
@@ -168,11 +168,21 @@ class GnaniTimbreTTSClient(BaseTTSClient):
                     except json.JSONDecodeError:
                         continue
 
+                    msg_type = str(data.get("type", "")).lower()
+                    if msg_type == "error":
+                        logger.error("Timbre v3.0 TTS error: %s", data.get("message") or data)
+                        break
+
+                    # Timbre v3.0 streams {"type":"audio","data":{"chunk_index":N,"audio":"<b64>","is_final":false}}
+                    nested = data.get("data") if isinstance(data.get("data"), dict) else {}
                     b64_audio = (
-                        data.get("audio")
-                        or data.get("audio_chunk")
-                        or data.get("audio_content")
-                        or data.get("data")
+                        nested.get("audio")
+                        or nested.get("audio_chunk")
+                        or nested.get("audio_content")
+                        or (data.get("audio") if isinstance(data.get("audio"), str) else None)
+                        or (data.get("audio_chunk") if isinstance(data.get("audio_chunk"), str) else None)
+                        or (data.get("audio_content") if isinstance(data.get("audio_content"), str) else None)
+                        or (data.get("data") if isinstance(data.get("data"), str) else None)
                     )
                     if isinstance(b64_audio, str) and b64_audio:
                         decoded = base64.b64decode(b64_audio)
@@ -185,7 +195,13 @@ class GnaniTimbreTTSClient(BaseTTSClient):
                         if pcm:
                             yield pcm
 
-                    if data.get("is_final") or data.get("final") or data.get("status") == "completed":
+                    if (
+                        msg_type in ("complete", "completed", "done")
+                        or nested.get("is_final")
+                        or data.get("is_final")
+                        or data.get("final")
+                        or data.get("status") == "completed"
+                    ):
                         break
         except asyncio.CancelledError:
             raise
