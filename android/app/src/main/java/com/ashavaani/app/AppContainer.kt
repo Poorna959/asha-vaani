@@ -3,6 +3,7 @@ package com.ashavaani.app
 import android.content.Context
 import com.ashavaani.app.audio.PcmAudioCapturer
 import com.ashavaani.app.audio.PcmAudioPlayer
+import com.ashavaani.app.auth.SupabaseAuthClient
 import com.ashavaani.app.data.AshaRepository
 import com.ashavaani.app.data.local.AppSettingsStore
 import com.ashavaani.app.data.local.AshaDatabase
@@ -16,6 +17,7 @@ class AppContainer(context: Context) {
     private val appContext = context.applicationContext
 
     val settingsStore: AppSettingsStore = AppSettingsStore(appContext)
+    val supabaseAuth: SupabaseAuthClient = SupabaseAuthClient()
     val database: AshaDatabase = AshaDatabase.getInstance(appContext)
     val apiClient: AshaApiClient = AshaApiClient()
     val repository: AshaRepository = AshaRepository(

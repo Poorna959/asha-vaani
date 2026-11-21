@@ -2,11 +2,14 @@ package com.ashavaani.app.data.local
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.ashavaani.app.auth.AshaAuthSession
 import com.ashavaani.app.data.remote.ServerUrlResolver
+import com.ashavaani.app.model.AshaJson
 import com.ashavaani.app.model.SupportedLanguage
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.serialization.encodeToString
 
 data class AppSettings(
     val backendUrl: String = ServerUrlResolver.DEFAULT_BASE_URL,
@@ -24,6 +27,25 @@ class AppSettingsStore(context: Context) {
 
     private val _settings = MutableStateFlow(readSettings())
     val settings: StateFlow<AppSettings> = _settings.asStateFlow()
+
+    private val _authSession = MutableStateFlow(readAuthSession())
+    val authSession: StateFlow<AshaAuthSession?> = _authSession.asStateFlow()
+
+    private fun readAuthSession(): AshaAuthSession? {
+        val raw = prefs.getString(KEY_AUTH_SESSION_JSON, null) ?: return null
+        return runCatching { AshaJson.decodeFromString<AshaAuthSession>(raw) }.getOrNull()
+    }
+
+    fun saveAuthSession(session: AshaAuthSession) {
+        val encoded = AshaJson.encodeToString(session)
+        prefs.edit().putString(KEY_AUTH_SESSION_JSON, encoded).apply()
+        _authSession.value = session
+    }
+
+    fun clearAuthSession() {
+        prefs.edit().remove(KEY_AUTH_SESSION_JSON).apply()
+        _authSession.value = null
+    }
 
     private fun readSettings(): AppSettings {
         val url = ServerUrlResolver.normalizeBaseUrl(prefs.getString(KEY_BACKEND_URL, null))
@@ -67,5 +89,6 @@ class AppSettingsStore(context: Context) {
         private const val KEY_BACKEND_URL = "backend_url"
         private const val KEY_PHC_PHONE = "phc_phone_number"
         private const val KEY_LANGUAGE = "language_code"
+        private const val KEY_AUTH_SESSION_JSON = "auth_session_json"
     }
 }

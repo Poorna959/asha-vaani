@@ -1,6 +1,7 @@
 package com.ashavaani.app.ui.walkmode
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -39,6 +40,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ashavaani.app.audio.AudioDspCapabilities
+import com.ashavaani.app.auth.AshaAuthSession
 import com.ashavaani.app.ui.components.StatusPill
 import com.ashavaani.app.ui.theme.AshaColors
 import com.ashavaani.app.ui.theme.ClinicalValueTextStyle
@@ -51,6 +53,8 @@ import com.ashavaani.app.ui.theme.ClinicalValueTextStyle
 @Composable
 fun SettingsSheet(
     uiState: WalkModeUiState,
+    authSession: AshaAuthSession? = null,
+    onSignOut: () -> Unit = {},
     onSaveAndReconnect: (backendUrl: String, phcPhone: String) -> Unit,
     onSyncOutboxNow: () -> Unit = {},
     onDismiss: () -> Unit,
@@ -99,6 +103,62 @@ fun SettingsSheet(
             }
 
             HorizontalDivider(color = AshaColors.DividerSubtle)
+
+            if (authSession != null) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp),
+                    color = AshaColors.SunlitCanvas,
+                    border = BorderStroke(1.dp, AshaColors.CardBorder),
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = authSession.displayName,
+                                    style = MaterialTheme.typography.titleSmall,
+                                )
+                                StatusPill(
+                                    text = when (authSession.provider) {
+                                        "google" -> "GMAIL"
+                                        "field_demo" -> "FIELD ASHA"
+                                        else -> "SUPABASE"
+                                    },
+                                    containerColor = AshaColors.ClinicalTealTint,
+                                    contentColor = AshaColors.ClinicalTeal,
+                                )
+                            }
+                            Text(
+                                text = authSession.email,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = AshaColors.InkSecondary,
+                            )
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = AshaColors.DangerBadgeSurface,
+                            border = BorderStroke(1.dp, AshaColors.DangerCrimson),
+                            modifier = Modifier.clickable(onClick = onSignOut),
+                        ) {
+                            Text(
+                                text = "Sign Out",
+                                color = AshaColors.DangerCrimsonDark,
+                                style = MaterialTheme.typography.labelMedium,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            )
+                        }
+                    }
+                }
+            }
 
             // Expanded Judge Telemetry HUD (P3-04)
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
