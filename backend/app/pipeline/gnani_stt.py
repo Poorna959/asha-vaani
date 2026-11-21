@@ -108,6 +108,7 @@ class GnaniPrismaSTTClient(BaseSTTClient):
         self._ws: Any = None
         self._last_audio_ts: float = 0.0
         self._closed: bool = False
+        self._reconnecting: bool = False
         self._connect_lock: asyncio.Lock = asyncio.Lock()
         self._ws_ready: asyncio.Event = asyncio.Event()
 
@@ -140,18 +141,22 @@ class GnaniPrismaSTTClient(BaseSTTClient):
         self._ws = ws
         self._ws_ready.set()
 
-    async def _reconnect(self) -> None:
+    async def _reconnect(self, close_reason: str = "reconnect") -> None:
         async with self._connect_lock:
             if self._closed:
                 return
-            if self._ws is not None:
-                try:
-                    await self._ws.close()
-                except Exception:
-                    pass
-                self._ws = None
-            self._ws_ready.clear()
-            await self._open_socket()
+            self._reconnecting = True
+            try:
+                if self._ws is not None:
+                    try:
+                        await self._ws.close(code=1000, reason=close_reason)
+                    except Exception:
+                        pass
+                    self._ws = None
+                self._ws_ready.clear()
+                await self._open_socket()
+            finally:
+                self._reconnecting = False
 
     async def connect(
         self,
@@ -191,9 +196,21 @@ class GnaniPrismaSTTClient(BaseSTTClient):
             logger.debug("Prisma finalize control frame skipped: %s", exc)
 
     async def update_language(self, language_code: LanguageCode | str) -> None:
-        self.language_code = str(language_code)
+        new_lang = str(language_code)
+        changed = new_lang != self.language_code
+        self.language_code = new_lang
         if self._ws is None or self._closed:
             return
+        if changed:
+            # Reconnect Prisma v3.0 so the new language_code is locked in WS handshake headers
+            try:
+                await self._reconnect(close_reason="language_change")
+                return
+            except Exception as exc:
+                logger.info("Prisma STT language-switch reconnect deferred (%s)", exc)
+                self._ws = None
+                self._ws_ready.clear()
+                return
         try:
             await self._ws.send(
                 json.dumps(
@@ -265,10 +282,15 @@ class GnaniPrismaSTTClient(BaseSTTClient):
                         confidence=confidence,
                         latency_ms=round(latency_ms, 1),
                     )
-                # Normal WebSocket closure (1000 OK without idle timeout) ends the stream cleanly.
+                # Normal WebSocket closure (1000 OK without idle/language-switch reconnect) ends stream cleanly.
                 close_code = getattr(current_ws, "close_code", None)
                 close_reason = str(getattr(current_ws, "close_reason", "") or "").lower()
-                if close_code == 1000 and "idle" not in close_reason:
+                if (
+                    close_code == 1000
+                    and "idle" not in close_reason
+                    and "language_change" not in close_reason
+                    and not self._reconnecting
+                ):
                     should_exit = True
             except asyncio.CancelledError:
                 raise

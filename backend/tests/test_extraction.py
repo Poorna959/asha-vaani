@@ -405,19 +405,20 @@ async def test_groq_register_intake_engine_and_provider_factory():
 
 
 async def test_p301_groq_register_intake_failover_on_429_and_503():
-    """Verify P3-01: RegisterIntakeEngine fails over from qwen3.8-27b to openai/gpt-oss-20b on 429/503."""
+    """Verify P3-01/P3-07: RegisterIntakeEngine fails over from qwen3.8-27b to openai/gpt-oss-120b on 429/503."""
     register = CustomRegister(
         id="REG-2",
         name="Newborn Baseline",
         fields=[
             RegisterField(id="F-1", register_id="REG-2", field_name="Age", field_type="NUMBER"),
             RegisterField(id="F-2", register_id="REG-2", field_name="Blood Group", field_type="TEXT"),
+            RegisterField(id="F-3", register_id="REG-2", field_name="House / Ward", field_type="TEXT"),
         ],
     )
     draft = RegisterIntakeDraft(
         register_id="REG-2",
         register_name="Newborn Baseline",
-        expected_fields=["Age", "Blood Group"],
+        expected_fields=["Age", "Blood Group", "House / Ward"],
     )
 
     for error_status in (429, 503):
@@ -426,9 +427,10 @@ async def test_p301_groq_register_intake_failover_on_429_and_503():
         def handler(request: httpx.Request, status_code: int = error_status) -> httpx.Response:
             payload = json.loads(request.content.decode("utf-8"))
             called_models.append(payload["model"])
+            assert payload.get("max_completion_tokens") == 1024
             if len(called_models) == 1:
                 return httpx.Response(status_code, json={"error": {"message": "Rate limited / busy"}})
-            assert payload["model"] == "openai/gpt-oss-20b"
+            assert payload["model"] == "openai/gpt-oss-120b"
             assert payload.get("reasoning_effort") == "low"
             return httpx.Response(
                 200,
@@ -442,10 +444,11 @@ async def test_p301_groq_register_intake_failover_on_429_and_503():
                                         "patient_name": "Radha Bai",
                                         "category": "NEWBORN",
                                         "answers": [
-                                            {"field_name": "Age", "value": "27"},
-                                            {"field_name": "Blood Group", "value": "B+"},
+                                            {"field_name": "Age", "value": "twenty seven"},
+                                            {"field_name": "Blood Group", "value": "B positive"},
+                                            {"field_name": "House / Ward", "value": "House nineteen"},
                                         ],
-                                        "spoken_readback": "Radha Bai, Age 27, Blood Group B+ recorded. Save?",
+                                        "spoken_readback": "Radha Bai, Age 27, Blood Group B+, House 19 recorded. Save?",
                                     }
                                 )
                             }
@@ -465,27 +468,34 @@ async def test_p301_groq_register_intake_failover_on_429_and_503():
                 http_client=client,
             )
             turn = await intake_engine.process_turn(
-                utterance="Radha Bai, age 27, blood group B positive",
+                utterance="Radha Bai, age twenty seven, blood group B positive, house nineteen",
                 register=register,
                 current_draft=draft,
                 language_code="en-IN",
             )
 
-        assert called_models == ["qwen/qwen3.8-27b", "openai/gpt-oss-20b"]
-        assert intake_engine.last_used_model == "openai/gpt-oss-20b"
+        assert called_models == ["qwen/qwen3.8-27b", "openai/gpt-oss-120b"]
+        assert intake_engine.last_used_model == "openai/gpt-oss-120b"
         assert turn.updated_draft.patient_name == "Radha Bai"
-        assert turn.updated_draft.field_answers == {"Age": 27, "Blood Group": "B+"}
+        assert turn.updated_draft.field_answers == {
+            "Age": 27,
+            "Blood Group": "B+",
+            "House / Ward": "House 19",
+        }
         assert turn.status == "AWAITING_CONFIRMATION"
 
 
 async def test_p301_groq_visit_extractor_failover_tracks_last_used_model():
-    """Verify P3-01: GroqVisitExtractor updates last_used_model when failing over on HTTP 429."""
+    """Verify P3-01/P3-07: GroqVisitExtractor fails over & caches 429 cooldown across turns."""
     called_models: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content.decode("utf-8"))
         called_models.append(payload["model"])
-        if len(called_models) == 1:
+        assert payload.get("max_completion_tokens") == 1024
+        if payload["model"] == "qwen/qwen3.8-27b":
+            return httpx.Response(429, headers={"Retry-After": "45"}, json={"error": {"message": "Too many requests"}})
+        if payload["model"] == "openai/gpt-oss-120b":
             return httpx.Response(429, json={"error": {"message": "Too many requests"}})
         return httpx.Response(
             200,
@@ -522,13 +532,65 @@ async def test_p301_groq_visit_extractor_failover_tracks_last_used_model():
             model="qwen/qwen3.8-27b",
             http_client=client,
         )
+        # Turn 1 hits 429 on qwen & 120b -> falls through to 20b
         result = await extractor.extract(
             utterance="Sunita Devi ANC checkup weight 54 kilo IFA 30 TT2 due",
             current_draft=VisitDraft(),
             language_code="en-IN",
         )
+        assert called_models == ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"]
+        assert extractor.last_used_model == "openai/gpt-oss-20b"
+        assert result.beneficiary_name == "Sunita Devi"
+        assert result.weight_kg == 54.0
 
-    assert called_models == ["qwen/qwen3.8-27b", "openai/gpt-oss-20b"]
-    assert extractor.last_used_model == "openai/gpt-oss-20b"
-    assert result.beneficiary_name == "Sunita Devi"
-    assert result.weight_kg == 54.0
+        # Turn 2 immediately skips cooled-down models and calls openai/gpt-oss-20b directly!
+        called_models.clear()
+        result2 = await extractor.extract(
+            utterance="Sunita Devi ANC checkup weight 54 kilo IFA 30 TT2 due",
+            current_draft=VisitDraft(),
+            language_code="en-IN",
+        )
+        assert called_models == ["openai/gpt-oss-20b"]
+        assert result2.weight_kg == 54.0
+
+
+async def test_p307_anti_hallucination_numeric_anchor_and_strict_language_lock():
+    """Verify P3-07: LLM cannot hallucinate 54->58 kg or drift into wrong language when locked."""
+    from app.pipeline.llm import (
+        GeminiExtractionPayload,
+        LLMProvider,
+        matches_locked_language,
+        normalize_spoken_numbers_to_digits,
+    )
+
+    assert normalize_spoken_numbers_to_digits("House nineteen") == "House 19"
+    assert normalize_spoken_numbers_to_digits("nineteen") == "19"
+    assert normalize_spoken_numbers_to_digits("fifty four kilo") == "54 kilo"
+    assert matches_locked_language("Sunita Devi ANC visit weight 54 kg. Save?", "en-IN") is True
+    assert matches_locked_language("सुनीता देवी, वजन 58 किलो। सेव करें?", "en-IN") is False
+    assert matches_locked_language("ಸುನಿತಾ ದೇವಿ, ತೂಕ 54 ಕಿಲೋ. ಉಳಿಸಬೇಕೇ?", "kn-IN") is True
+    assert matches_locked_language("Sunita Devi, weight 54 kg. Save?", "kn-IN") is False
+
+    class HallucinatingDriftingLLM(LLMProvider):
+        async def extract(self, *args, **kwargs) -> GeminiExtractionPayload:
+            return GeminiExtractionPayload(
+                intent="LOG_VISIT",
+                beneficiary_id="BEN-001",
+                beneficiary_name="Sunita Devi",
+                visit_type="ANC",
+                weight_kg=58.0,  # Hallucinated! User said 54 kilo!
+                ifa_tablets_given=20,  # Hallucinated! User said 30!
+                spoken_readback="सुनीता देवी, वजन 58 किलो दर्ज किया। सेव करें?",  # Wrong language for en-IN!
+            )
+
+    engine = ClinicalStateEngine(provider=HallucinatingDriftingLLM())
+    turn = await engine.process_turn(
+        utterance="Sunita Devi ANC checkup, weight 54 kilo, no bleeding, no fever, IFA goli 30.",
+        current_draft=VisitDraft(),
+        language_code="en-IN",
+    )
+    assert turn.updated_draft.weight_kg == 54.0
+    assert turn.updated_draft.ifa_tablets_given == 30
+    assert matches_locked_language(turn.extraction.spoken_readback, "en-IN") is True
+    assert "54" in turn.extraction.spoken_readback
+    assert "सुनीता" not in turn.extraction.spoken_readback

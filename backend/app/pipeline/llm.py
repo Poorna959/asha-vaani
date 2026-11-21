@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from abc import ABC, abstractmethod
 from datetime import date, timedelta
 from typing import Any, Optional
@@ -205,8 +206,122 @@ MONTH_MAP = {
 }
 
 
+ENGLISH_ONES: dict[str, int] = {
+    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4,
+    "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9,
+}
+ENGLISH_TEENS: dict[str, int] = {
+    "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
+    "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19,
+}
+ENGLISH_TENS: dict[str, int] = {
+    "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50,
+    "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90,
+}
+
+_COMPOUND_TENS_RE = re.compile(
+    r"(?<!\w)(twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)[\s\-]+"
+    r"(one|two|three|four|five|six|seven|eight|nine)(?!\w)",
+    re.IGNORECASE,
+)
+_TEENS_OR_TENS_RE = re.compile(
+    r"(?<!\w)(ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|"
+    r"twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?!\w)",
+    re.IGNORECASE,
+)
+_LABELED_SINGLE_DIGIT_RE = re.compile(
+    r"(?<!\w)(house|ward|age|room|flat|door|block|sector|no\.?|number)\s+"
+    r"(zero|one|two|three|four|five|six|seven|eight|nine)(?!\w)",
+    re.IGNORECASE,
+)
+_STANDALONE_DIGIT_WORD_RE = re.compile(
+    r"^\s*(zero|one|two|three|four|five|six|seven|eight|nine)\s*$",
+    re.IGNORECASE,
+)
+_BLOOD_GROUP_WORD_RE = re.compile(
+    r"(?<!\w)(AB|A|B|O)\s*(positive|pos|plus|\+|negative|neg|minus|\-)(?!\w)",
+    re.IGNORECASE,
+)
+
+
+def normalize_spoken_numbers_to_digits(text: str) -> str:
+    """Convert spoken English number words ('nineteen', 'fifty four', 'House nineteen') to digits."""
+    if not text:
+        return text
+    out = _COMPOUND_TENS_RE.sub(
+        lambda m: str(ENGLISH_TENS[m.group(1).lower()] + ENGLISH_ONES[m.group(2).lower()]),
+        text,
+    )
+    out = _TEENS_OR_TENS_RE.sub(
+        lambda m: str(
+            ENGLISH_TEENS.get(m.group(1).lower(), ENGLISH_TENS.get(m.group(1).lower(), m.group(1)))
+        ),
+        out,
+    )
+    out = _LABELED_SINGLE_DIGIT_RE.sub(
+        lambda m: f"{m.group(1)} {ENGLISH_ONES[m.group(2).lower()]}",
+        out,
+    )
+    standalone = _STANDALONE_DIGIT_WORD_RE.match(out)
+    if standalone:
+        return str(ENGLISH_ONES[standalone.group(1).lower()])
+    return out
+
+
+def normalize_register_field_value(field_name: str, value: Any, field_type: str = "TEXT") -> Any:
+    """Normalize custom register answers so spoken numbers & blood groups store cleanly."""
+    if not isinstance(value, str):
+        return value
+    cleaned = normalize_spoken_numbers_to_digits(value.strip())
+    low_name = field_name.lower()
+    if "blood" in low_name:
+        cleaned = _BLOOD_GROUP_WORD_RE.sub(
+            lambda m: f"{m.group(1).upper()}{'+' if m.group(2).lower() in ('positive', 'pos', 'plus', '+') else '-'}",
+            cleaned,
+        )
+    return _coerce_field_value(cleaned, field_type)
+
+
+_INDIC_SCRIPT_RANGES: dict[str, tuple[int, int]] = {
+    "hi": (0x0900, 0x097F),
+    "kn": (0x0C80, 0x0CFF),
+    "ta": (0x0B80, 0x0BFF),
+    "te": (0x0C00, 0x0C7F),
+}
+
+
+def matches_locked_language(reply_text: str, language_code: LanguageCode | str) -> bool:
+    """Return True if reply_text respects an explicitly locked language_code (no script drift)."""
+    if not reply_text or not reply_text.strip():
+        return False
+    code = str(language_code or "").strip().lower()
+    if not code or code == "indic-auto":
+        return True
+
+    short = code.split("-")[0]
+    counts: dict[str, int] = {k: 0 for k in _INDIC_SCRIPT_RANGES}
+    for ch in reply_text:
+        cp = ord(ch)
+        for lang_key, (lo, hi) in _INDIC_SCRIPT_RANGES.items():
+            if lo <= cp <= hi:
+                counts[lang_key] += 1
+                break
+
+    if short == "en":
+        # Strictly English: reject if any Indic script characters leaked into reply
+        return sum(counts.values()) == 0
+
+    if short in _INDIC_SCRIPT_RANGES:
+        # Must contain characters of the locked Indic script and NOT be dominated by another Indic script
+        target_count = counts[short]
+        other_indic = sum(v for k, v in counts.items() if k != short)
+        return target_count >= 2 and target_count >= other_indic
+
+    return True
+
+
 def normalize_indic_numbers(text: str) -> str:
-    """Convert spoken Indic/English decimal phrases like 'do point aath' into '2.8'."""
+    """Convert spoken Indic/English decimal & compound number phrases ('do point aath', 'fifty four') to digits."""
     word_alt = "|".join(sorted(DIGIT_WORDS.keys(), key=len, reverse=True))
     decimal_pattern = re.compile(
         rf"(?<!\w)({word_alt}|\d+)\s+(?:point|dashamlav|dot)\s+({word_alt}|\d+)(?!\w)",
@@ -221,6 +336,7 @@ def normalize_indic_numbers(text: str) -> str:
         return f"{left_num}.{right_num}"
 
     result = decimal_pattern.sub(_replace_decimal, text)
+    result = normalize_spoken_numbers_to_digits(result)
 
     # Also convert standalone spoken number right before weight/tablet units
     unit_pattern = re.compile(
@@ -702,11 +818,13 @@ Your ONLY job is to extract structured home-visit data from Indic + English code
 STRICT RULES:
 1. NEVER diagnose any illness or disease.
 2. NEVER suggest, prescribe, or recommend any medicine, dosage, or home remedy.
-3. Understand local clinical code-mix terms: "TT injection", "TT2", "ANC checkup", "IFA goli", "HBNC", "BCG", "OPV", "Pentavalent", spoken weights like "do point aath kilo" -> 2.8.
+3. Understand local clinical code-mix terms: "TT injection", "TT2", "ANC checkup", "IFA goli", "HBNC", "BCG", "OPV", "Pentavalent", spoken weights like "do point aath kilo" -> 2.8, "fifty four kilo" -> 54.0.
 4. Only return fields mentioned in the current utterance (leave unmentioned fields null so existing draft values are preserved).
-5. If the worker corrects a value (e.g. "no, weight is 2.8 kilo"), set intent="CORRECT_FIELD" and return only the corrected field(s).
-6. Set intent="CONFIRM_SAVE" ONLY when the worker explicitly confirms saving (e.g. "yes", "haan theek hai", "sari", "save").
-7. Keep spoken_readback concise (1-2 short sentences) in the worker's active language, ending with a save confirmation question.
+5. ZERO HALLUCINATION: NEVER invent, guess, round, or alter any number (weight_kg, ifa_tablets_given, next_visit_date) that was NOT explicitly spoken in asha_utterance. Always write numbers as digits (e.g. 54, 2.8, 19), never as English words.
+6. If the worker corrects a value (e.g. "no, weight is 2.8 kilo"), set intent="CORRECT_FIELD" and return only the corrected field(s).
+7. Set intent="CONFIRM_SAVE" ONLY when the worker explicitly confirms saving (e.g. "yes save", "haan theek hai", "sari", "save karo"). NEVER confirm saving when current_draft has no beneficiary_name/visit_type yet.
+8. STRICT LANGUAGE LOCK: Write spoken_readback strictly in active_language (en-IN -> English ONLY, hi-IN -> Hindi Devanagari, kn-IN -> Kannada, ta-IN -> Tamil, te-IN -> Telugu). NEVER switch or mix into another language. Keep spoken_readback concise (1-2 short sentences) ending with a save confirmation question.
+9. POSITIVE NOTES ONLY: Only record positively reported facts in notes. NEVER write negated symptoms into notes (if the worker says "no bleeding, no fever", omit bleeding and fever from notes).
 """
 
 
@@ -778,7 +896,10 @@ def _sanitize_visit_payload(data: dict[str, Any]) -> dict[str, Any]:
     return cleaned
 
 
-GROQ_BACKUP_MODEL = "openai/gpt-oss-20b"
+GROQ_BACKUP_MODELS: tuple[str, ...] = ("openai/gpt-oss-120b", "openai/gpt-oss-20b")
+GROQ_BACKUP_MODEL = GROQ_BACKUP_MODELS[0]
+GROQ_DEFAULT_COOLDOWN_S = 60.0
+GROQ_MAX_COMPLETION_TOKENS = 1024
 
 
 def _groq_reasoning_extra(model: str) -> dict[str, Any]:
@@ -791,15 +912,53 @@ def _groq_reasoning_extra(model: str) -> dict[str, Any]:
     return {}
 
 
+def _ordered_groq_candidates(
+    primary_model: str,
+    cooldowns: dict[str, float],
+    now: Optional[float] = None,
+) -> list[str]:
+    """Build failover model list skipping models currently in HTTP 429 cooldown."""
+    ts = time.monotonic() if now is None else now
+    ordered: list[str] = [primary_model]
+    for backup in GROQ_BACKUP_MODELS:
+        if backup not in ordered:
+            ordered.append(backup)
+
+    ready = [m for m in ordered if cooldowns.get(m, 0.0) <= ts]
+    if ready:
+        return ready
+    # All models are in cooldown — try the one whose cooldown expires soonest
+    return sorted(ordered, key=lambda m: cooldowns.get(m, 0.0))
+
+
+def _record_groq_cooldown(
+    cooldowns: dict[str, float],
+    model_name: str,
+    response: httpx.Response,
+    default_cooldown_s: float = GROQ_DEFAULT_COOLDOWN_S,
+) -> float:
+    """Record a bounded cooldown after HTTP 429/503 so exhausted models aren't retried every turn."""
+    retry_after_raw = response.headers.get("retry-after")
+    cooldown = default_cooldown_s
+    if retry_after_raw:
+        try:
+            cooldown = max(15.0, min(120.0, float(retry_after_raw)))
+        except ValueError:
+            cooldown = default_cooldown_s
+    cooldowns[model_name] = time.monotonic() + cooldown
+    return cooldown
+
+
 class GroqVisitExtractor(LLMProvider):
-    """Low-latency Groq OpenAI-compatible structured clinical extractor with offline fallback."""
+    """Low-latency Groq OpenAI-compatible structured clinical extractor with 429 cooldown & failover."""
 
     def __init__(
         self,
         api_key: Optional[str] = None,
         model: Optional[str] = None,
         base_url: Optional[str] = None,
-        timeout_s: float = 6.0,
+        timeout_s: float = 8.0,
+        cooldown_s: float = GROQ_DEFAULT_COOLDOWN_S,
         fallback: Optional[LLMProvider] = None,
         http_client: Optional[httpx.AsyncClient] = None,
     ) -> None:
@@ -808,8 +967,10 @@ class GroqVisitExtractor(LLMProvider):
         self.model = model or settings.groq_model
         self.base_url = (base_url or settings.groq_base_url).rstrip("/")
         self.timeout_s = timeout_s
+        self.cooldown_s = cooldown_s
         self.fallback = fallback or RuleBasedVisitExtractor()
         self._client: Optional[httpx.AsyncClient] = http_client
+        self._model_cooldowns: dict[str, float] = {}
         self.last_used_model: str = self.model if is_live_api_key(self.api_key) else "rule_based_offline"
 
     def _get_client(self) -> Optional[httpx.AsyncClient]:
@@ -865,9 +1026,7 @@ class GroqVisitExtractor(LLMProvider):
             ensure_ascii=False,
         )
 
-        candidate_models = [self.model]
-        if self.model != GROQ_BACKUP_MODEL:
-            candidate_models.append(GROQ_BACKUP_MODEL)
+        candidate_models = _ordered_groq_candidates(self.model, self._model_cooldowns)
 
         for idx, model_name in enumerate(candidate_models):
             body: dict[str, Any] = {
@@ -877,20 +1036,25 @@ class GroqVisitExtractor(LLMProvider):
                     {"role": "user", "content": prompt},
                 ],
                 "temperature": 0.1,
-                "max_tokens": 350,
+                "max_completion_tokens": GROQ_MAX_COMPLETION_TOKENS,
                 "response_format": {"type": "json_object"},
                 **_groq_reasoning_extra(model_name),
             }
             try:
                 response = await client.post("/chat/completions", json=body)
-                if response.status_code in (429, 503) and idx + 1 < len(candidate_models):
-                    logger.warning(
-                        "Groq model %s returned HTTP %s; retrying on backup model %s.",
-                        model_name,
-                        response.status_code,
-                        candidate_models[idx + 1],
+                if response.status_code in (429, 503):
+                    cd = _record_groq_cooldown(
+                        self._model_cooldowns, model_name, response, self.cooldown_s
                     )
-                    continue
+                    if idx + 1 < len(candidate_models):
+                        logger.warning(
+                            "Groq model %s returned HTTP %s (cooling down %.0fs); retrying on backup model %s.",
+                            model_name,
+                            response.status_code,
+                            cd,
+                            candidate_models[idx + 1],
+                        )
+                        continue
                 response.raise_for_status()
                 data = response.json()
                 content = data["choices"][0]["message"]["content"]
@@ -1113,14 +1277,22 @@ class ClinicalStateEngine:
         extracted_fields: dict[str, Any] = {}
         field_diffs: list[FieldDiff] = []
 
+        # P3-07 Anti-Hallucination Numeric Anchor:
+        # When the raw utterance explicitly states a weight or IFA count, never let the LLM
+        # drift or hallucinate a different number (e.g. spoken 54 kg -> hallucinated 58 kg).
+        spoken_weight = _extract_weight_kg(utterance)
+        effective_weight = spoken_weight if spoken_weight is not None else raw_payload.weight_kg
+        spoken_ifa = _extract_ifa_tablets(utterance)
+        effective_ifa = spoken_ifa if spoken_ifa is not None else raw_payload.ifa_tablets_given
+
         patch_candidates: dict[str, Any] = {
             "beneficiary_id": raw_payload.beneficiary_id,
             "beneficiary_name": raw_payload.beneficiary_name,
             "visit_type": raw_payload.visit_type,
-            "weight_kg": raw_payload.weight_kg,
+            "weight_kg": effective_weight,
             "vaccinations_due": raw_payload.vaccinations_due,
             "next_visit_date": raw_payload.next_visit_date,
-            "ifa_tablets_given": raw_payload.ifa_tablets_given,
+            "ifa_tablets_given": effective_ifa,
             "notes": raw_payload.notes,
         }
 
@@ -1184,7 +1356,15 @@ class ClinicalStateEngine:
             # Never save without reading back first!
             effective_intent = "LOG_VISIT"
 
-        spoken_reply = raw_payload.spoken_readback.strip() or build_localized_readback(
+        candidate_reply = raw_payload.spoken_readback.strip()
+        if candidate_reply and not matches_locked_language(candidate_reply, language_code):
+            logger.info(
+                "Overriding drifted LLM readback to enforce locked language %s.",
+                language_code,
+            )
+            candidate_reply = ""
+
+        spoken_reply = candidate_reply or build_localized_readback(
             draft=working,
             diffs=field_diffs,
             intent=effective_intent,
@@ -1442,6 +1622,10 @@ def build_register_intake_readback(
 
 
 GROQ_REGISTER_INTAKE_SYSTEM_INSTRUCTION = REGISTER_INTAKE_SYSTEM_INSTRUCTION + """
+ADDITIONAL STRICT RULES:
+- ZERO HALLUCINATION: Never invent or alter numbers not spoken in asha_utterance.
+- DIGITS ONLY: Always write numeric values and house/ward numbers as digits (e.g. "26", "House 19", "O+"), NEVER as English words ("twenty six", "nineteen").
+- STRICT LANGUAGE LOCK: Write spoken_readback strictly in active_language (en-IN -> English ONLY, hi-IN -> Hindi Devanagari, kn-IN -> Kannada, ta-IN -> Tamil, te-IN -> Telugu). Never mix languages.
 OUTPUT FORMAT: Return ONLY a single compact JSON object (no markdown, no extra text) with exact keys:
 {
   "intent": "LOG_VISIT" | "CORRECT_FIELD" | "CONFIRM_SAVE" | "CANCEL" | "ASK_CLARIFICATION",
@@ -1501,7 +1685,8 @@ class RegisterIntakeEngine:
         groq_model: Optional[str] = None,
         groq_base_url: Optional[str] = None,
         llm_provider: Optional[str] = None,
-        timeout_s: float = 6.0,
+        timeout_s: float = 8.0,
+        cooldown_s: float = GROQ_DEFAULT_COOLDOWN_S,
         http_client: Optional[httpx.AsyncClient] = None,
     ) -> None:
         settings = get_settings()
@@ -1512,8 +1697,10 @@ class RegisterIntakeEngine:
         self.groq_model = groq_model or settings.groq_model
         self.groq_base_url = (groq_base_url or settings.groq_base_url).rstrip("/")
         self.timeout_s = timeout_s
+        self.cooldown_s = cooldown_s
         self._client: Any = None
         self._groq_client: Optional[httpx.AsyncClient] = http_client
+        self._model_cooldowns: dict[str, float] = {}
         self.last_used_model: str = "rule_based_offline"
 
     def _get_client(self) -> Any:
@@ -1561,9 +1748,7 @@ class RegisterIntakeEngine:
             ensure_ascii=False,
         )
 
-        candidate_models = [self.groq_model]
-        if self.groq_model != GROQ_BACKUP_MODEL:
-            candidate_models.append(GROQ_BACKUP_MODEL)
+        candidate_models = _ordered_groq_candidates(self.groq_model, self._model_cooldowns)
 
         for idx, model_name in enumerate(candidate_models):
             body: dict[str, Any] = {
@@ -1573,20 +1758,25 @@ class RegisterIntakeEngine:
                     {"role": "user", "content": prompt},
                 ],
                 "temperature": 0.1,
-                "max_tokens": 350,
+                "max_completion_tokens": GROQ_MAX_COMPLETION_TOKENS,
                 "response_format": {"type": "json_object"},
                 **_groq_reasoning_extra(model_name),
             }
             try:
                 response = await client.post("/chat/completions", json=body)
-                if response.status_code in (429, 503) and idx + 1 < len(candidate_models):
-                    logger.warning(
-                        "Groq register intake model %s returned HTTP %s; retrying on backup model %s.",
-                        model_name,
-                        response.status_code,
-                        candidate_models[idx + 1],
+                if response.status_code in (429, 503):
+                    cd = _record_groq_cooldown(
+                        self._model_cooldowns, model_name, response, self.cooldown_s
                     )
-                    continue
+                    if idx + 1 < len(candidate_models):
+                        logger.warning(
+                            "Groq register intake model %s returned HTTP %s (cooling down %.0fs); retrying on backup model %s.",
+                            model_name,
+                            response.status_code,
+                            cd,
+                            candidate_models[idx + 1],
+                        )
+                        continue
                 response.raise_for_status()
                 data = response.json()
                 content = data["choices"][0]["message"]["content"]
@@ -1709,10 +1899,13 @@ class RegisterIntakeEngine:
                 key_low = kv.field_name.strip().lower()
                 if key_low in field_type_map:
                     canon_name, ftype = field_type_map[key_low]
-                    new_answers[canon_name] = _coerce_field_value(kv.value, ftype)
+                    new_answers[canon_name] = normalize_register_field_value(canon_name, kv.value, ftype)
                 else:
-                    new_answers[kv.field_name.strip()] = kv.value.strip()
+                    raw_k = kv.field_name.strip()
+                    new_answers[raw_k] = normalize_register_field_value(raw_k, kv.value, "TEXT")
             llm_reply = gemini_payload.spoken_readback.strip()
+            if llm_reply and not matches_locked_language(llm_reply, language_code):
+                llm_reply = ""
         else:
             llm_reply = ""
             if any(p.search(cleaned) for p in CANCEL_PATTERNS):
@@ -1721,7 +1914,16 @@ class RegisterIntakeEngine:
                 new_category = None
                 new_answers = {}
             else:
-                new_name, new_answers = _extract_dynamic_register_fields_offline(cleaned, register)
+                raw_name, raw_answers = _extract_dynamic_register_fields_offline(
+                    normalize_spoken_numbers_to_digits(cleaned), register
+                )
+                new_name = raw_name
+                new_answers = {
+                    k: normalize_register_field_value(
+                        k, v, field_type_map[k.lower()][1] if k.lower() in field_type_map else "TEXT"
+                    )
+                    for k, v in raw_answers.items()
+                }
                 new_category = _extract_visit_type(cleaned)
                 has_new_data = bool(new_name or new_answers or new_category)
 

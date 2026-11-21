@@ -279,3 +279,41 @@ async def test_live_timbre_v3_nested_data_audio_and_lakshmi_voice():
     assert captured_requests[0]["voice"] == "Lakshmi"
     assert captured_requests[0]["language"] == "kn-IN"
     assert chunks == [pcm_chunk_1, pcm_chunk_2]
+
+
+@pytest.mark.asyncio
+async def test_p307_prisma_stt_update_language_reconnects_with_locked_header():
+    """Verify P3-07: switching language reconnects Prisma STT with the new language_code header."""
+    seen_header_langs: list[str] = []
+
+    async def fake_prisma(ws):
+        seen_header_langs.append(ws.request.headers.get("language_code", ""))
+        async for msg in ws:
+            if isinstance(msg, bytes):
+                continue
+            data = json.loads(msg)
+            if data.get("type") == "finalize":
+                await ws.send(
+                    json.dumps(
+                        {
+                            "transcript": "Sunita Devi weight 54 kilo",
+                            "is_final": True,
+                            "language_code": ws.request.headers.get("language_code", ""),
+                        }
+                    )
+                )
+                await ws.close()
+
+    async with websockets.serve(fake_prisma, "127.0.0.1", 0) as server:
+        port = server.sockets[0].getsockname()[1]
+        client = GnaniPrismaSTTClient(api_key="live-key", ws_url=f"ws://127.0.0.1:{port}")
+        await client.connect(language_code="indic-auto")
+        # Switch to en-IN -> must reconnect with en-IN in handshake headers
+        await client.update_language("en-IN")
+        await client.finalize_turn()
+        events = [ev async for ev in client.transcripts()]
+        await client.close()
+
+    assert seen_header_langs == ["indic-auto", "en-IN"]
+    assert len(events) == 1
+    assert events[0].language == "en-IN"
