@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 
 import numpy as np
@@ -29,26 +30,21 @@ def _make_silence_frame(duration_ms: int = 20, sr: int = 16000) -> bytes:
 
 
 def _receive_turn_packets(ws, min_pcm_chunks: int = 1) -> tuple[list[dict], list[bytes]]:
-    """Collect JSON events and binary PCM frames until metrics + audio chunks arrive."""
+    """Collect JSON events and binary PCM frames until final form/intake update + audio chunks arrive."""
     events: list[dict] = []
     audio_chunks: list[bytes] = []
-    got_form_or_saved = False
+    got_state_update = False
 
     for _ in range(100):
         packet = ws.receive()
         if packet.get("text") is not None:
-            import json
-
             data = json.loads(packet["text"])
             events.append(data)
-            if data.get("type") in ("form_update", "visit_saved"):
-                got_form_or_saved = True
+            if data.get("type") in ("form_update", "register_intake_update"):
+                got_state_update = True
         elif packet.get("bytes") is not None:
             audio_chunks.append(packet["bytes"])
-            if got_form_or_saved and len(audio_chunks) >= min_pcm_chunks:
-                # Drain remaining frames cleanly when mock TTS is fast
-                pass
-        if got_form_or_saved and len(audio_chunks) >= min_pcm_chunks:
+        if got_state_update and len(audio_chunks) >= min_pcm_chunks:
             break
 
     return events, audio_chunks
@@ -287,3 +283,159 @@ def test_danger_sign_escalation_and_patient_select_continuity_over_ws():
         assert len(danger_visits) == 1
         assert danger_visits[0]["beneficiary_id"] == "BEN-002"
         assert danger_visits[0]["danger_signs"] == ["DS_NB_HIGH_FEVER_COLD"]
+
+
+def test_multi_house_session_clears_patient_context_after_save():
+    """Verify saving a pre-selected patient visit clears patient_context for the next house."""
+    cfg = Settings(mock_gnani=True, gemini_api_key="")
+    app = create_app(
+        settings=cfg,
+        db_path=":memory:",
+        stt_factory=lambda: MockPrismaSTTClient(partial_delay_s=0.0),
+        tts_factory=lambda: MockTimbreTTSClient(chunk_delay_s=0.0, max_chunks_per_sentence=2),
+        clinical_engine=ClinicalStateEngine(provider=RuleBasedVisitExtractor()),
+    )
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/session") as ws:
+            # House 1: Pre-select BEN-001 (Sunita Devi) and save visit
+            ws.send_json({"type": "session_start", "language_code": "en-IN", "patient_id": "BEN-001"})
+            pre_form = ws.receive_json()
+            assert pre_form["record"]["beneficiary_id"] == "BEN-001"
+
+            ws.send_json({"type": "text_turn", "text": "Weight 55 kilo, TT2 injection due"})
+            _receive_turn_packets(ws, min_pcm_chunks=1)
+            ws.send_json({"type": "barge_in"})
+
+            ws.send_json({"type": "text_turn", "text": "Yes save"})
+            save_events, _ = _receive_turn_packets(ws, min_pcm_chunks=1)
+            saved1 = next(e for e in save_events if e["type"] == "visit_saved")
+            assert saved1["visit"]["beneficiary_id"] == "BEN-001"
+            ws.send_json({"type": "barge_in"})
+
+            # House 2 (same WS session): Speak about Meena Kumari (BEN-003)
+            ws.send_json({"type": "text_turn", "text": "Meena Kumari ANC checkup weight 51 kilo"})
+            h2_events, _ = _receive_turn_packets(ws, min_pcm_chunks=1)
+            h2_form = next(e for e in h2_events if e["type"] == "form_update")
+            assert h2_form["record"]["beneficiary_id"] == "BEN-003"
+            assert h2_form["record"]["beneficiary_name"] == "Meena Kumari"
+            assert h2_form["record"]["weight_kg"] == 51.0
+
+
+def test_fr72_custom_register_voice_intake_correction_save_and_safety_over_ws():
+    """Verify FR-7.2: voice onboarding into custom register dynamic fields, diff correction, save, search & safety."""
+    cfg = Settings(mock_gnani=True, gemini_api_key="")
+    app = create_app(
+        settings=cfg,
+        db_path=":memory:",
+        stt_factory=lambda: MockPrismaSTTClient(partial_delay_s=0.0),
+        tts_factory=lambda: MockTimbreTTSClient(chunk_delay_s=0.0, max_chunks_per_sentence=2),
+        clinical_engine=ClinicalStateEngine(provider=RuleBasedVisitExtractor()),
+    )
+
+    with TestClient(app) as client:
+        # 1. Create a custom register with dynamic fields
+        reg_resp = client.post(
+            "/api/registers",
+            json={
+                "name": "High Risk Maternal Intake",
+                "description": "First-visit custom survey",
+                "fields": [
+                    {"field_name": "Age", "field_type": "NUMBER"},
+                    {"field_name": "Blood Group", "field_type": "TEXT"},
+                    {"field_name": "Medical History", "field_type": "TEXT"},
+                    {"field_name": "House / Ward", "field_type": "TEXT"},
+                ],
+            },
+        )
+        assert reg_resp.status_code == 201
+        reg_id = reg_resp.json()["id"]
+
+        with client.websocket_connect("/ws/session") as ws:
+            # 2. Enter custom-register voice intake mode
+            ws.send_json({"type": "session_start", "language_code": "en-IN", "register_id": reg_id})
+            init_ev = ws.receive_json()
+            assert init_ev["type"] == "register_intake_update"
+            assert init_ev["draft"]["register_id"] == reg_id
+            assert init_ev["draft"]["expected_fields"] == [
+                "Age",
+                "Blood Group",
+                "Medical History",
+                "House / Ward",
+            ]
+
+            # 3. Turn 1: Speak patient intake details
+            ws.send_json(
+                {
+                    "type": "text_turn",
+                    "text": "Savitha Rao, Age 26, Blood Group O+, Medical History High BP, House 19",
+                }
+            )
+            t1_events, t1_pcm = _receive_turn_packets(ws, min_pcm_chunks=1)
+            assert len(t1_pcm) >= 1
+            upd1 = next(e for e in t1_events if e["type"] == "register_intake_update")
+            assert upd1["status"] == "AWAITING_CONFIRMATION"
+            assert upd1["draft"]["patient_name"] == "Savitha Rao"
+            assert upd1["draft"]["field_answers"]["Age"] == 26
+            assert upd1["draft"]["field_answers"]["Blood Group"] == "O+"
+            assert upd1["draft"]["field_answers"]["Medical History"] == "High BP"
+            assert upd1["draft"]["field_answers"]["House / Ward"] == "House 19"
+            ws.send_json({"type": "barge_in"})
+
+            # 4. Turn 2: Voice correction on dynamic field ("No, Age is 28")
+            ws.send_json({"type": "text_turn", "text": "No, Age is 28"})
+            t2_events, _ = _receive_turn_packets(ws, min_pcm_chunks=1)
+            upd2 = next(e for e in t2_events if e["type"] == "register_intake_update")
+            assert upd2["draft"]["field_answers"]["Age"] == 28
+            assert upd2["field_diff"] == {"field": "Age", "old_value": 26, "new_value": 28}
+            ws.send_json({"type": "barge_in"})
+
+            # 5. Turn 3: Confirm save -> commits PatientRecord + returns Field: Answer ProfileView
+            ws.send_json({"type": "text_turn", "text": "Yes save"})
+            t3_events, _ = _receive_turn_packets(ws, min_pcm_chunks=1)
+            saved_pat = next(e for e in t3_events if e["type"] == "patient_saved")
+            new_patient_id = saved_pat["patient"]["id"]
+            assert saved_pat["patient"]["patient_name"] == "Savitha Rao"
+            assert saved_pat["patient"]["field_answers"]["Age"] == 28
+            assert any(
+                item["field_name"] == "Blood Group" and item["answer"] == "O+"
+                for item in saved_pat["profile"]["items"]
+            )
+            ws.send_json({"type": "barge_in"})
+
+            # 6. Safety check: Danger signs STILL escalate immediately during custom register intake
+            ws.send_json(
+                {
+                    "type": "text_turn",
+                    "text": "Geeta Devi, Age 24, heavy bleeding in pregnancy",
+                }
+            )
+            esc_events, _ = _receive_turn_packets(ws, min_pcm_chunks=1)
+            esc = next(e for e in esc_events if e["type"] == "danger_escalation")
+            assert esc["code"] == "DS_MAT_BLEEDING"
+            esc_upd = next(e for e in esc_events if e["type"] == "register_intake_update")
+            assert esc_upd["status"] == "ESCALATED"
+            assert "PHC" in esc_upd["spoken_reply"]
+            ws.send_json({"type": "barge_in"})
+
+            # 7. Continuity check: Tap newly voice-onboarded patient -> switches back to visit follow-up mode
+            ws.send_json({"type": "patient_select", "patient_id": new_patient_id})
+            # Drain any stale frames until form_update
+            fup_form = None
+            for _ in range(10):
+                pkt = ws.receive()
+                if pkt.get("text"):
+                    parsed = json.loads(pkt["text"])
+                    if parsed.get("type") == "form_update":
+                        fup_form = parsed
+                        break
+            assert fup_form is not None
+            assert fup_form["record"]["beneficiary_id"] == new_patient_id
+            assert fup_form["record"]["beneficiary_name"] == "Savitha Rao"
+
+        # 8. Verify voice-onboarded patient appears in in-register search & CSV export
+        search_res = client.get(f"/api/registers/{reg_id}/patients", params={"q": "Savitha"}).json()
+        assert len(search_res) == 1
+        assert search_res[0]["field_answers"]["Age"] == 28
+        csv_text = client.get(f"/api/registers/{reg_id}/export", params={"format": "csv"}).content.decode("utf-8-sig")
+        assert "Savitha Rao" in csv_text and "O+" in csv_text

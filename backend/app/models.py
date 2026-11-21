@@ -226,12 +226,24 @@ class DangerSignAlert(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class RegisterIntakeDraft(BaseModel):
+    """Mutable in-memory draft when onboarding a patient into a custom register by voice (FR-7.2)."""
+
+    register_id: str
+    register_name: str
+    patient_name: Optional[str] = None
+    category: VisitType = "ANC"
+    field_answers: dict[str, Any] = Field(default_factory=dict)
+    expected_fields: list[str] = Field(default_factory=list)
+
+
 class WsSessionStart(BaseModel):
-    """Client -> Server message configuring session language and optional patient."""
+    """Client -> Server message configuring session language and optional patient or register."""
 
     type: Literal["session_start"] = "session_start"
     language_code: LanguageCode = "indic-auto"
     patient_id: Optional[str] = None
+    register_id: Optional[str] = None
 
 
 class WsPatientSelect(BaseModel):
@@ -239,6 +251,32 @@ class WsPatientSelect(BaseModel):
 
     type: Literal["patient_select"] = "patient_select"
     patient_id: str
+
+
+class WsRegisterSelect(BaseModel):
+    """Client -> Server message entering voice intake mode for a custom register (FR-7.2)."""
+
+    type: Literal["register_select"] = "register_select"
+    register_id: str
+
+
+class WsRegisterIntakeUpdateEvent(BaseModel):
+    """Server -> Client live custom-register intake draft and voice-correction diff."""
+
+    type: Literal["register_intake_update"] = "register_intake_update"
+    status: SessionStatus
+    draft: RegisterIntakeDraft
+    field_diff: Optional[FieldDiff] = None
+    field_diffs: list[FieldDiff] = Field(default_factory=list)
+    spoken_reply: str = ""
+
+
+class WsPatientSavedEvent(BaseModel):
+    """Server -> Client confirmation when a custom-register patient is committed via voice."""
+
+    type: Literal["patient_saved"] = "patient_saved"
+    patient: PatientRecord
+    profile: PatientProfileView
 
 
 class WsTextTurn(BaseModel):

@@ -21,8 +21,11 @@ from pydantic import BaseModel, Field
 
 from app.config import get_settings
 from app.models import (
+    CustomRegister,
     FieldDiff,
     LanguageCode,
+    RegisterField,
+    RegisterIntakeDraft,
     SessionStatus,
     VisitDraft,
     VisitType,
@@ -357,6 +360,22 @@ def _extract_next_visit_date(text: str, today: Optional[date] = None) -> Optiona
     return None
 
 
+NON_SURNAME_TOKENS: frozenset[str] = frozenset(
+    {
+        "anc", "hbnc", "visit", "checkup", "check", "weight", "wajan", "vajan",
+        "kilo", "kg", "gram", "baby", "newborn", "infant", "mother", "pregnant",
+        "pregnancy", "immunisation", "immunization", "vaccination", "vaccine",
+        "tt", "tt1", "tt2", "bcg", "opv", "pentavalent", "ifa", "iron", "goli",
+        "fever", "high", "bleeding", "fits", "convulsions", "house", "ward",
+        "age", "umar", "blood", "group", "history", "medical", "phone", "mobile",
+        "lmp", "parity", "gravida", "no", "not", "is", "has", "had", "for",
+        "ka", "ki", "ke", "ko", "mein", "me", "hai", "se", "and", "or", "with",
+        "next", "due", "given", "took", "normal", "severe", "today", "yesterday",
+        "patient", "beneficiary", "name",
+    }
+)
+
+
 def _match_roster_patient(
     text: str,
     roster: list[dict[str, Any]],
@@ -375,13 +394,34 @@ def _match_roster_patient(
         if clean_name and clean_name in lower:
             return entry
 
-    # 3. First name match (only if unique and >= 4 chars to avoid spurious hits)
+    # 3. First name match (only if unique, >= 4 chars, and NOT followed by a conflicting surname)
     hits: list[dict[str, Any]] = []
     for entry in roster:
         full_name = str(entry.get("patient_name", "")).strip()
-        first = full_name.split()[0].lower() if full_name else ""
-        if len(first) >= 4 and re.search(rf"(?<!\w){re.escape(first)}(?!\w)", lower):
-            hits.append(entry)
+        clean_parts = re.sub(r"\s*\([^)]*\)", "", full_name).strip().split()
+        if not clean_parts:
+            continue
+        first = clean_parts[0].lower()
+        expected_last = clean_parts[1].lower() if len(clean_parts) >= 2 else None
+        if len(first) < 4:
+            continue
+        m = re.search(rf"(?<!\w){re.escape(first)}(?!\w)", lower)
+        if not m:
+            continue
+        # Inspect immediate next word: if it looks like a different surname (e.g. "Priya Sharma"
+        # vs roster "Priya Nair"), reject the false first-name hit.
+        after = text[m.end() :].lstrip(" ,:")
+        next_tok_match = re.match(r"([A-Za-z]+)", after)
+        if expected_last and next_tok_match:
+            next_tok = next_tok_match.group(1)
+            next_low = next_tok.lower()
+            if (
+                next_low != expected_last
+                and next_low not in NON_SURNAME_TOKENS
+                and len(next_low) >= 3
+            ):
+                continue
+        hits.append(entry)
     if len(hits) == 1:
         return hits[0]
 
@@ -393,6 +433,41 @@ def _match_roster_patient(
             house_val = str(entry.get("field_answers", {}).get("House / Ward", "")).lower()
             if re.search(rf"\bhouse\s*0*{re.escape(target_num)}\b", house_val):
                 return entry
+    return None
+
+
+def _extract_unseen_beneficiary_name(text: str) -> Optional[str]:
+    """Extract a walk-in patient name when not found in the village roster (offline fallback)."""
+    cleaned = text.strip()
+    if not cleaned:
+        return None
+
+    # 1. Explicit introducer ("patient Priya Sharma", "name is Radha Bai", "beneficiary Sita")
+    explicit = re.search(
+        r"(?<!\w)(?:patient(?:\s+name)?|beneficiary(?:\s+name)?|mother(?:\s+name)?|name)\s*(?:is|hai|:|-)?\s*"
+        r"([A-Za-z][A-Za-z'.-]+(?:\s+[A-Za-z][A-Za-z'.-]+){0,2})",
+        cleaned,
+        re.IGNORECASE,
+    )
+    if explicit:
+        words = [w for w in explicit.group(1).split() if w.lower() not in NON_SURNAME_TOKENS]
+        if words:
+            return " ".join(w.capitalize() for w in words[:3])
+
+    # 2. Leading 2-to-3 word proper name before clinical cues ("Priya Sharma ANC checkup...")
+    leading = re.match(
+        r"^([A-Za-z][A-Za-z'.-]{1,}(?:\s+[A-Za-z][A-Za-z'.-]{1,}){1,2}?)(?=\s*[,:\-]|"
+        r"\s+(?:anc|hbnc|pregnancy|pregnant|newborn|baby|immunisation|immunization|checkup|visit|"
+        r"weight|wajan|age|umar|blood|house|ward|tt|tt1|tt2|ifa|bcg|opv|bleeding|high\s+fever|has|ka|ki)\b)",
+        cleaned,
+        re.IGNORECASE,
+    )
+    if leading:
+        raw_words = leading.group(1).split()
+        filtered = [w for w in raw_words if w.lower() not in NON_SURNAME_TOKENS]
+        if len(filtered) == len(raw_words) and len(filtered) >= 2:
+            return " ".join(w.capitalize() for w in filtered)
+
     return None
 
 
@@ -585,6 +660,8 @@ class RuleBasedVisitExtractor(LLMProvider):
                 beneficiary_name = matched["patient_name"]
                 if visit_type is None and matched.get("category") in ("ANC", "NEWBORN", "IMMUNISATION"):
                     visit_type = matched["category"]
+            elif not current_draft.beneficiary_name and not CORRECTION_CUE_PATTERN.search(cleaned):
+                beneficiary_name = _extract_unseen_beneficiary_name(cleaned)
 
         # Detect whether this utterance is correcting an existing field in the draft
         is_correction = bool(
@@ -882,4 +959,445 @@ class ClinicalStateEngine:
             status=next_status,
             should_save=False,
             readback_completed=has_minimum_fields,
+        )
+
+
+# ---------------------------------------------------------------------------
+# FR-7.2: Voice-Driven Custom Register Patient Intake Engine
+# ---------------------------------------------------------------------------
+
+
+class KeyValueAnswer(BaseModel):
+    """Typed dynamic field-answer pair compatible with Gemini structured output."""
+
+    field_name: str
+    value: str
+
+
+class GeminiRegisterIntakePayload(BaseModel):
+    """Typed JSON schema for extracting custom-register intake fields via Gemini 2.5 Flash."""
+
+    intent: VoiceIntent = "LOG_VISIT"
+    patient_name: Optional[str] = None
+    category: Optional[VisitType] = None
+    answers: list[KeyValueAnswer] = Field(default_factory=list)
+    spoken_readback: str = ""
+
+
+class RegisterIntakeTurnResult(BaseModel):
+    """State transition produced for one voice turn in custom-register intake mode."""
+
+    updated_draft: RegisterIntakeDraft
+    intent: VoiceIntent
+    field_diffs: list[FieldDiff] = Field(default_factory=list)
+    spoken_readback: str = ""
+    status: SessionStatus = "LISTENING"
+    should_save: bool = False
+    readback_completed: bool = False
+
+
+FIELD_ALIAS_MAP: dict[str, tuple[str, ...]] = {
+    "age": ("age", "umar", "umra", "vayasu", "vayas"),
+    "blood group": ("blood group", "blood"),
+    "medical history": ("medical history", "history", "prior history"),
+    "house / ward": ("house / ward", "house/ward", "house no", "house number", "house", "ward"),
+    "house": ("house no", "house number", "house"),
+    "ward": ("ward no", "ward"),
+    "phone": ("phone number", "phone", "mobile number", "mobile"),
+    "lmp": ("lmp", "last menstrual period", "last period"),
+    "parity": ("parity", "gravida", "pregnancy count"),
+    "gravida": ("gravida", "parity"),
+    "birth weight": ("birth weight", "weight", "wajan"),
+    "date of birth": ("date of birth", "dob", "birth date"),
+}
+
+REGISTER_INTAKE_SYSTEM_INSTRUCTION = """You are ASHA Vaani helping an ASHA worker onboard a patient into a custom register by voice.
+Map spoken details (Hindi, Kannada, Tamil, Telugu, English code-mix) strictly into the register's defined field names.
+
+STRICT RULES:
+1. NEVER diagnose any illness or disease.
+2. NEVER suggest, prescribe, or recommend any medicine, dosage, or treatment.
+3. Return only fields mentioned in the current utterance (omit unmentioned fields).
+4. Use exact field_name values from register_fields whenever possible.
+5. Set intent="CORRECT_FIELD" when the worker fixes a value, "CONFIRM_SAVE" ONLY when explicitly confirming after read-back, "CANCEL" when discarding.
+6. Keep spoken_readback concise (1-2 short sentences) in the active language asking to confirm before saving.
+"""
+
+
+def _aliases_for_field(field: RegisterField) -> list[str]:
+    lower_name = field.field_name.strip().lower()
+    aliases: list[str] = [field.field_name.strip()]
+    for key, extra in FIELD_ALIAS_MAP.items():
+        if key == lower_name or key in lower_name:
+            aliases.extend(extra)
+    # Also allow slash-separated components (e.g., "House / Ward" -> "House", "Ward")
+    if "/" in field.field_name:
+        for part in field.field_name.split("/"):
+            p = part.strip()
+            if len(p) >= 3:
+                aliases.append(p)
+    # Deduplicate longest-first so specific cues win
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for a in sorted(aliases, key=len, reverse=True):
+        k = a.lower()
+        if k not in seen:
+            seen.add(k)
+            ordered.append(a)
+    return ordered
+
+
+def _coerce_field_value(raw_val: str, field_type: str) -> Any:
+    val = raw_val.strip(" ,;.-:")
+    if not val:
+        return None
+    norm = normalize_indic_numbers(val)
+
+    if field_type == "NUMBER":
+        m = re.search(r"-?\d+(?:\.\d+)?", norm)
+        if m:
+            num_str = m.group(0)
+            return float(num_str) if "." in num_str else int(num_str)
+        return val
+
+    if field_type == "BOOLEAN":
+        low = norm.lower()
+        if re.search(r"\b(?:yes|true|haan|han|houdu|aam|avunu|present|positive)\b", low):
+            return True
+        if re.search(r"\b(?:no|false|nahi|nahin|illa|illai|ledu|none|absent|negative)\b", low):
+            return False
+        return val
+
+    if field_type == "DATE":
+        parsed = _extract_next_visit_date(norm)
+        return parsed or val
+
+    return val
+
+
+def _extract_dynamic_register_fields_offline(
+    utterance: str,
+    register: CustomRegister,
+) -> tuple[Optional[str], dict[str, Any]]:
+    """Extract patient_name and dynamic field answers for any CustomRegister offline."""
+    cleaned = utterance.strip()
+    if not cleaned:
+        return None, {}
+
+    # Build match spans for all defined fields in this register
+    spans: list[tuple[int, int, RegisterField]] = []
+    for field in register.fields:
+        for alias in _aliases_for_field(field):
+            escaped = re.escape(alias).replace(r"\ ", r"\s+")
+            pattern = re.compile(rf"(?<!\w){escaped}(?!\w)", re.IGNORECASE)
+            for match in pattern.finditer(cleaned):
+                spans.append((match.start(), match.end(), field))
+
+    # Keep non-overlapping spans, preferring earliest start then longest cue
+    spans.sort(key=lambda item: (item[0], -(item[1] - item[0])))
+    chosen: list[tuple[int, int, RegisterField]] = []
+    last_end = -1
+    for start, end, field in spans:
+        if start >= last_end:
+            chosen.append((start, end, field))
+            last_end = end
+
+    answers: dict[str, Any] = {}
+    for idx, (start, end, field) in enumerate(chosen):
+        next_start = chosen[idx + 1][0] if idx + 1 < len(chosen) else len(cleaned)
+        raw_segment = cleaned[end:next_start]
+        # Strip leading connector ("is", "hai", ":", "-", "=")
+        raw_segment = re.sub(r"^\s*(?:is|hai|are|was|to|=|:|-)+\s*", "", raw_segment, flags=re.IGNORECASE)
+        # Stop at sentence-ending punctuation (preserving decimals) or trailing connector
+        raw_segment = re.split(r"[;!?।]|\.(?=\s|$)", raw_segment)[0]
+        raw_segment = re.sub(r",?\s*\b(?:and|aur|matthu|marrum|mariyu)\s*$", "", raw_segment, flags=re.IGNORECASE)
+        raw_segment = raw_segment.strip(" ,;:-")
+
+        # Special clean-up for House / Ward when matched via "house" keyword so "House 22" keeps "House"
+        if field.field_name.lower().startswith("house") and re.match(r"^\d+", raw_segment):
+            raw_segment = f"House {raw_segment}"
+        # Special clean-up for Age ("24 years" -> 24) handled by NUMBER coercion
+        coerced = _coerce_field_value(raw_segment, field.field_type)
+        if coerced is not None and coerced != "":
+            answers[field.field_name] = coerced
+
+    # Extract patient_name: explicit cue first, else text before first matched field
+    patient_name = _extract_unseen_beneficiary_name(cleaned)
+    if not patient_name and chosen and chosen[0][0] > 0:
+        prefix = cleaned[: chosen[0][0]].strip(" ,;:-")
+        # Strip leading introducer / correction phrases
+        prefix = re.sub(
+            r"^(?:add|new\s+patient|register|patient|name|beneficiary|entry\s+for|for)\s*(?:is|hai|:|-)?\s*",
+            "",
+            prefix,
+            flags=re.IGNORECASE,
+        ).strip(" ,;:-")
+        if prefix and not CORRECTION_CUE_PATTERN.search(prefix):
+            words = prefix.split()
+            if 1 <= len(words) <= 3 and all(re.fullmatch(r"[A-Za-z][A-Za-z'.-]*", w) for w in words):
+                if not any(w.lower() in NON_SURNAME_TOKENS for w in words):
+                    patient_name = " ".join(w.capitalize() for w in words)
+
+    return patient_name, answers
+
+
+def build_register_intake_readback(
+    draft: RegisterIntakeDraft,
+    diffs: list[FieldDiff],
+    intent: VoiceIntent,
+    language_code: LanguageCode | str,
+    utterance: str = "",
+) -> str:
+    """Build localized read-back for custom register patient intake (zero diagnosis/medicine)."""
+    lang = resolve_short_language(language_code, utterance)
+
+    if intent == "CANCEL":
+        return {
+            "hi": "ठीक है, यह रजिस्टर एंट्री रद्द कर दी गई है।",
+            "kn": "ಸರಿ, ಈ ರಿಜಿಸ್ಟರ್ ದಾಖಲೆಯನ್ನು ರದ್ದುಗೊಳಿಸಲಾಗಿದೆ.",
+            "ta": "சரி, இந்த பதிவேடு உள்ளீடு ரத்து செய்யப்பட்டது.",
+            "te": "సరే, ఈ రిజిస్టర్ ఎంట్రీ రద్దు చేయబడింది.",
+        }.get(lang, "Okay, this register entry has been cancelled.")
+
+    if intent == "CORRECT_FIELD" and diffs:
+        summary = ", ".join(f"{d.field} {d.new_value}" for d in diffs)
+        if lang == "hi":
+            return f"जानकारी अपडेट कर दी है: {summary}। क्या मैं {draft.register_name} में सेव कर लूं?"
+        if lang == "kn":
+            return f"ವಿವರಗಳನ್ನು ಬದಲಾಯಿಸಲಾಗಿದೆ: {summary}. {draft.register_name} ನಲ್ಲಿ ಉಳಿಸಬೇಕೆ?"
+        if lang == "ta":
+            return f"விவரங்கள் மாற்றப்பட்டன: {summary}. {draft.register_name} பதிவேட்டில் சேமிக்கலாமா?"
+        if lang == "te":
+            return f"వివరాలు మార్చబడ్డాయి: {summary}. {draft.register_name} లో సేవ్ చేయాలా?"
+        return f"Updated {summary}. Shall I save to {draft.register_name}?"
+
+    if not draft.patient_name:
+        return {
+            "hi": f"{draft.register_name} के लिए कृपया मरीज का नाम और विवरण बताएं।",
+            "kn": f"{draft.register_name} ಗಾಗಿ ದಯವಿಟ್ಟು ರೋಗಿಯ ಹೆಸರು ಮತ್ತು ವಿವರಗಳನ್ನು ಹೇಳಿ.",
+            "ta": f"{draft.register_name} பதிவேட்டிற்கு நோயாளியின் பெயர் மற்றும் விவரங்களைச் சொல்லவும்.",
+            "te": f"{draft.register_name} కోసం దయచేసి రోగి పేరు మరియు వివరాలు చెప్పండి.",
+        }.get(lang, f"Please tell me the patient name and details for {draft.register_name}.")
+
+    pairs = [f"{k}: {v}" for k, v in draft.field_answers.items() if v is not None and v != ""]
+    fields_text = ", ".join(pairs)
+    details = f"{draft.patient_name}, {fields_text}" if fields_text else draft.patient_name
+
+    if lang == "hi":
+        return f"{draft.register_name} के लिए दर्ज किया: {details}। क्या यह सही है, सेव कर लूं?"
+    if lang == "kn":
+        return f"{draft.register_name} ಗಾಗಿ ದಾಖಲಿಸಲಾಗಿದೆ: {details}. ಇದು ಸರಿಯಾಗಿದೆಯೇ, ಉಳಿಸಬೇಕೆ?"
+    if lang == "ta":
+        return f"{draft.register_name} க்காக பதிவு செய்யப்பட்டது: {details}. இது சரியா, சேமிக்கலாமா?"
+    if lang == "te":
+        return f"{draft.register_name} కోసం నమోదు చేయబడింది: {details}. ఇది సరైనదేనా, సేవ్ చేయాలా?"
+    return f"For {draft.register_name}: {details}. Is this correct — shall I save?"
+
+
+class RegisterIntakeEngine:
+    """Voice-driven dynamic custom-register intake engine (FR-7.2) with Gemini + offline fallback."""
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
+    ) -> None:
+        settings = get_settings()
+        self.api_key = api_key if api_key is not None else settings.gemini_api_key
+        self.model = model or settings.gemini_model
+        self._client: Any = None
+
+    def _get_client(self) -> Any:
+        if self._client is None and self.api_key:
+            from google import genai
+
+            self._client = genai.Client(api_key=self.api_key)
+        return self._client
+
+    async def _extract_with_gemini(
+        self,
+        utterance: str,
+        register: CustomRegister,
+        current_draft: RegisterIntakeDraft,
+        language_code: LanguageCode | str,
+    ) -> Optional[GeminiRegisterIntakePayload]:
+        client = self._get_client()
+        if client is None:
+            return None
+
+        from google.genai import types
+
+        prompt = json.dumps(
+            {
+                "today": date.today().isoformat(),
+                "active_language": language_code,
+                "register_name": register.name,
+                "register_fields": [
+                    {"field_name": f.field_name, "field_type": f.field_type}
+                    for f in register.fields
+                ],
+                "current_draft": current_draft.model_dump(),
+                "asha_utterance": utterance,
+            },
+            ensure_ascii=False,
+        )
+        try:
+            response = await client.aio.models.generate_content(
+                model=self.model,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=REGISTER_INTAKE_SYSTEM_INSTRUCTION,
+                    response_mime_type="application/json",
+                    response_schema=GeminiRegisterIntakePayload,
+                    thinking_config=types.ThinkingConfig(thinking_budget=0),
+                    temperature=0.1,
+                ),
+            )
+            if response.parsed is not None:
+                if isinstance(response.parsed, GeminiRegisterIntakePayload):
+                    return response.parsed
+                return GeminiRegisterIntakePayload.model_validate(response.parsed)
+            if response.text:
+                return GeminiRegisterIntakePayload.model_validate_json(response.text)
+        except Exception as exc:  # pragma: no cover
+            logger.warning("Gemini register intake failed (%s); falling back offline.", exc)
+        return None
+
+    async def process_turn(
+        self,
+        utterance: str,
+        register: CustomRegister,
+        current_draft: RegisterIntakeDraft,
+        language_code: LanguageCode | str = "indic-auto",
+        readback_completed: bool = False,
+    ) -> RegisterIntakeTurnResult:
+        """Process one voice turn while onboarding a patient into a CustomRegister."""
+        cleaned = utterance.strip()
+        working = current_draft.model_copy(deep=True)
+        field_type_map = {f.field_name.lower(): (f.field_name, f.field_type) for f in register.fields}
+
+        gemini_payload = await self._extract_with_gemini(
+            utterance=cleaned,
+            register=register,
+            current_draft=working,
+            language_code=language_code,
+        )
+
+        if gemini_payload is not None:
+            intent = gemini_payload.intent
+            new_name = gemini_payload.patient_name
+            new_category = gemini_payload.category
+            new_answers: dict[str, Any] = {}
+            for kv in gemini_payload.answers:
+                key_low = kv.field_name.strip().lower()
+                if key_low in field_type_map:
+                    canon_name, ftype = field_type_map[key_low]
+                    new_answers[canon_name] = _coerce_field_value(kv.value, ftype)
+                else:
+                    new_answers[kv.field_name.strip()] = kv.value.strip()
+            llm_reply = gemini_payload.spoken_readback.strip()
+        else:
+            llm_reply = ""
+            if any(p.search(cleaned) for p in CANCEL_PATTERNS):
+                intent = "CANCEL"
+                new_name = None
+                new_category = None
+                new_answers = {}
+            else:
+                new_name, new_answers = _extract_dynamic_register_fields_offline(cleaned, register)
+                new_category = _extract_visit_type(cleaned)
+                has_new_data = bool(new_name or new_answers or new_category)
+
+                if not has_new_data and any(p.search(cleaned) for p in CONFIRM_PATTERNS):
+                    intent = "CONFIRM_SAVE"
+                elif (
+                    CORRECTION_CUE_PATTERN.search(cleaned)
+                    and has_new_data
+                    and (working.patient_name or working.field_answers)
+                ):
+                    intent = "CORRECT_FIELD"
+                elif has_new_data:
+                    intent = "LOG_VISIT"
+                else:
+                    intent = "ASK_CLARIFICATION"
+
+        if intent == "CANCEL":
+            reply = llm_reply or build_register_intake_readback(
+                working, [], "CANCEL", language_code, cleaned
+            )
+            fresh = RegisterIntakeDraft(
+                register_id=register.id,
+                register_name=register.name,
+                category=working.category,
+                expected_fields=[f.field_name for f in register.fields],
+            )
+            return RegisterIntakeTurnResult(
+                updated_draft=fresh,
+                intent="CANCEL",
+                field_diffs=[],
+                spoken_readback=reply,
+                status="LISTENING",
+                should_save=False,
+                readback_completed=False,
+            )
+
+        diffs: list[FieldDiff] = []
+        if new_name:
+            if working.patient_name and working.patient_name != new_name:
+                diffs.append(
+                    FieldDiff(field="patient_name", old_value=working.patient_name, new_value=new_name)
+                )
+            working.patient_name = new_name
+
+        if new_category:
+            working.category = new_category
+
+        for key, val in new_answers.items():
+            if val is None or val == "":
+                continue
+            old_val = working.field_answers.get(key)
+            working.field_answers[key] = val
+            if old_val is not None and old_val != "" and old_val != val:
+                diffs.append(FieldDiff(field=key, old_value=old_val, new_value=val))
+
+        has_minimum = bool(working.patient_name)
+        if intent == "CONFIRM_SAVE" and readback_completed and has_minimum:
+            lang = resolve_short_language(language_code, cleaned)
+            saved_msg = {
+                "hi": f"धन्यवाद, {working.patient_name} का रिकॉर्ड {register.name} में सेव हो गया है।",
+                "kn": f"ಧನ್ಯವಾದಗಳು, {working.patient_name} ಅವರ ದಾಖಲೆಯನ್ನು {register.name} ನಲ್ಲಿ ಉಳಿಸಲಾಗಿದೆ.",
+                "ta": f"நன்றி, {working.patient_name} பதிவு {register.name} பதிவேட்டில் சேமிக்கப்பட்டது.",
+                "te": f"ధన్యవాదాలు, {working.patient_name} రికార్డు {register.name} లో సేవ్ చేయబడింది.",
+            }.get(lang, f"Thank you, {working.patient_name} has been saved to {register.name}.")
+            return RegisterIntakeTurnResult(
+                updated_draft=working,
+                intent="CONFIRM_SAVE",
+                field_diffs=[],
+                spoken_readback=saved_msg,
+                status="SAVED",
+                should_save=True,
+                readback_completed=True,
+            )
+
+        effective_intent: VoiceIntent = (
+            "CORRECT_FIELD" if (intent == "CORRECT_FIELD" or diffs) else intent
+        )
+        if effective_intent == "CONFIRM_SAVE" and not readback_completed:
+            effective_intent = "LOG_VISIT"
+
+        reply = llm_reply or build_register_intake_readback(
+            draft=working,
+            diffs=diffs,
+            intent=effective_intent,
+            language_code=language_code,
+            utterance=cleaned,
+        )
+        return RegisterIntakeTurnResult(
+            updated_draft=working,
+            intent=effective_intent,
+            field_diffs=diffs,
+            spoken_readback=reply,
+            status="AWAITING_CONFIRMATION" if has_minimum else "LISTENING",
+            should_save=False,
+            readback_completed=has_minimum,
         )

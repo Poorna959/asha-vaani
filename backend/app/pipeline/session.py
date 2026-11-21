@@ -13,16 +13,22 @@ from fastapi import WebSocket, WebSocketDisconnect
 from app.config import Settings, get_settings
 from app.db import Database
 from app.models import (
+    CustomRegister,
     DangerSignAlert,
     LanguageCode,
+    PatientRecordCreate,
+    RegisterIntakeDraft,
     SessionStatus,
     VisitDraft,
     VisitRecordCreate,
+    VisitType,
     WsBargeInClearEvent,
     WsDangerEscalationEvent,
     WsErrorEvent,
     WsFormUpdateEvent,
     WsMetricsEvent,
+    WsPatientSavedEvent,
+    WsRegisterIntakeUpdateEvent,
     WsTranscriptEvent,
     WsVisitSavedEvent,
 )
@@ -36,10 +42,14 @@ from app.pipeline.gnani_stt import (
     create_stt_client,
 )
 from app.pipeline.gnani_tts import BaseTTSClient, create_tts_client
-from app.pipeline.llm import ClinicalStateEngine
+from app.pipeline.llm import ClinicalStateEngine, RegisterIntakeEngine
 from app.pipeline.vad import AdaptiveEndpointVAD, VadEvent
 from app.services.followup import build_follow_up_create
-from app.services.register_service import PatientNotFoundError, RegisterService
+from app.services.register_service import (
+    PatientNotFoundError,
+    RegisterNotFoundError,
+    RegisterService,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +68,7 @@ class VoiceSessionOrchestrator:
         stt_client: Optional[BaseSTTClient] = None,
         tts_client: Optional[BaseTTSClient] = None,
         settings: Optional[Settings] = None,
+        register_intake_engine: Optional[RegisterIntakeEngine] = None,
     ) -> None:
         self.ws = websocket
         self.db = db
@@ -66,6 +77,10 @@ class VoiceSessionOrchestrator:
         self.compliance_guardrail = compliance_guardrail
         self.clinical_engine = clinical_engine
         self.settings = settings or get_settings()
+        self.register_intake_engine = register_intake_engine or RegisterIntakeEngine(
+            api_key=self.settings.gemini_api_key,
+            model=self.settings.gemini_model,
+        )
 
         self.stt: BaseSTTClient = stt_client or create_stt_client(self.settings)
         self.tts: BaseTTSClient = tts_client or create_tts_client(self.settings)
@@ -81,6 +96,8 @@ class VoiceSessionOrchestrator:
         self.draft: VisitDraft = VisitDraft()
         self.readback_completed: bool = False
         self.patient_context: Optional[dict[str, Any]] = None
+        self.active_register: Optional[CustomRegister] = None
+        self.register_draft: Optional[RegisterIntakeDraft] = None
         self._turn_transcripts: list[str] = []
 
         # Concurrency & barge-in state
@@ -148,6 +165,9 @@ class VoiceSessionOrchestrator:
             )
             return
 
+        # Exit custom-register intake mode when locking a patient for routine follow-up
+        self.active_register = None
+        self.register_draft = None
         self.patient_context = ctx
         self.draft = VisitDraft(
             beneficiary_id=ctx["beneficiary_id"],
@@ -165,6 +185,91 @@ class VoiceSessionOrchestrator:
         )
 
     # ------------------------------------------------------------------
+    # Custom Register Voice Intake Mode Selection (FR-7.2)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _infer_register_category(register_name: str) -> VisitType:
+        low = register_name.lower()
+        if any(tok in low for tok in ("newborn", "hbnc", "neonate", "baby")):
+            return "NEWBORN"
+        if any(tok in low for tok in ("immuni", "vaccin")):
+            return "IMMUNISATION"
+        return "ANC"
+
+    async def _select_register(self, register_id: str) -> None:
+        try:
+            register = await self.register_service.get_register(register_id)
+        except RegisterNotFoundError as exc:
+            await self._send_json(
+                WsErrorEvent(message=str(exc), code="REGISTER_NOT_FOUND").model_dump()
+            )
+            return
+
+        self.patient_context = None
+        self.draft = VisitDraft()
+        self.active_register = register
+        self.register_draft = RegisterIntakeDraft(
+            register_id=register.id,
+            register_name=register.name,
+            category=self._infer_register_category(register.name),
+            expected_fields=[f.field_name for f in register.fields],
+        )
+        self.readback_completed = False
+        self._turn_transcripts.clear()
+        self.status = "LISTENING"
+        await self._send_json(
+            WsRegisterIntakeUpdateEvent(
+                status="LISTENING",
+                draft=self.register_draft,
+                spoken_reply="",
+            ).model_dump()
+        )
+
+    async def _stream_tts_reply(
+        self,
+        safe_reply: str,
+        active_lang: str,
+        effective_status: SessionStatus,
+        turn_start: float,
+        asr_latency_ms: float,
+        llm_latency_ms: float,
+    ) -> None:
+        """Stream synthesized 16kHz PCM audio via Gnani Timbre v3.0 (cancellable on barge-in)."""
+        if not safe_reply:
+            return
+        self._is_speaking = True
+        if effective_status == "AWAITING_CONFIRMATION":
+            self.status = "SPEAKING_READBACK"
+        tts_start = time.perf_counter()
+        first_audio_sent = False
+        try:
+            async for pcm_chunk in self.tts.synthesize_stream(
+                text=safe_reply,
+                language_code=active_lang,
+            ):
+                if not first_audio_sent:
+                    first_audio_sent = True
+                    now = time.perf_counter()
+                    ttfa_ms = (now - turn_start) * 1000.0
+                    tts_first_ms = (now - tts_start) * 1000.0
+                    await self._send_json(
+                        WsMetricsEvent(
+                            ttfa_ms=round(ttfa_ms, 1),
+                            asr_latency_ms=round(asr_latency_ms, 1),
+                            llm_latency_ms=round(llm_latency_ms, 1),
+                            tts_latency_ms=round(tts_first_ms, 1),
+                        ).model_dump()
+                    )
+                await self._send_bytes(pcm_chunk)
+        except asyncio.CancelledError:
+            raise
+        finally:
+            self._is_speaking = False
+            if self.status == "SPEAKING_READBACK":
+                self.status = "AWAITING_CONFIRMATION"
+
+    # ------------------------------------------------------------------
     # Final Transcript -> Danger Signs -> LLM -> FR-6 Guardrail -> TTS
     # ------------------------------------------------------------------
 
@@ -180,11 +285,17 @@ class VoiceSessionOrchestrator:
             else (event.language or "indic-auto")
         )
 
-        # 1. Deterministic NHM Danger-Sign Check (independent of LLM, < 1ms)
+        active_visit_type = (
+            self.register_draft.category
+            if self.active_register is not None and self.register_draft is not None
+            else self.draft.visit_type
+        )
+
+        # 1. Deterministic NHM Danger-Sign Check (independent of LLM, < 1ms — active in BOTH modes)
         danger_alerts: list[DangerSignAlert] = self.danger_detector.detect(
             text=event.text,
             language_code=active_lang,
-            visit_type=self.draft.visit_type,
+            visit_type=active_visit_type,
         )
         if danger_alerts:
             for alert in danger_alerts:
@@ -201,6 +312,87 @@ class VoiceSessionOrchestrator:
                 ).model_dump()
             )
 
+        # Branch A: FR-7.2 Custom Register Voice Intake Mode
+        if self.active_register is not None and self.register_draft is not None:
+            llm_start = time.perf_counter()
+            intake_result = await self.register_intake_engine.process_turn(
+                utterance=event.text,
+                register=self.active_register,
+                current_draft=self.register_draft,
+                language_code=active_lang,
+                readback_completed=self.readback_completed,
+            )
+            llm_latency_ms = (time.perf_counter() - llm_start) * 1000.0
+
+            self.register_draft = intake_result.updated_draft
+            self.readback_completed = intake_result.readback_completed or bool(danger_alerts)
+
+            compliance = self.compliance_guardrail.enforce(
+                proposed_reply=intake_result.spoken_readback,
+                language_code=active_lang,
+                user_utterance=event.text,
+                danger_alerts=danger_alerts,
+            )
+            safe_reply = compliance.safe_text
+            effective_status: SessionStatus = intake_result.status
+            if danger_alerts and not intake_result.should_save:
+                effective_status = "ESCALATED"
+            self.status = effective_status
+
+            if intake_result.should_save and self.register_draft.patient_name:
+                saved_patient = await self.register_service.add_patient(
+                    PatientRecordCreate(
+                        register_id=self.active_register.id,
+                        patient_name=self.register_draft.patient_name,
+                        category=self.register_draft.category,
+                        field_answers=dict(self.register_draft.field_answers),
+                    )
+                )
+                profile_view = await self.register_service.get_patient_profile_view(saved_patient.id)
+                # Refresh register schema in case new fields were auto-synced
+                self.active_register = await self.register_service.get_register(self.active_register.id)
+                await self._send_json(
+                    WsPatientSavedEvent(patient=saved_patient, profile=profile_view).model_dump()
+                )
+                await self._send_json(
+                    WsRegisterIntakeUpdateEvent(
+                        status="SAVED",
+                        draft=self.register_draft,
+                        spoken_reply=safe_reply,
+                    ).model_dump()
+                )
+                # Reset intake draft for the next patient in this register
+                self.register_draft = RegisterIntakeDraft(
+                    register_id=self.active_register.id,
+                    register_name=self.active_register.name,
+                    category=self._infer_register_category(self.active_register.name),
+                    expected_fields=[f.field_name for f in self.active_register.fields],
+                )
+                self.readback_completed = False
+                self._turn_transcripts.clear()
+            else:
+                diffs = intake_result.field_diffs
+                await self._send_json(
+                    WsRegisterIntakeUpdateEvent(
+                        status=effective_status,
+                        draft=self.register_draft,
+                        field_diff=diffs[0] if diffs else None,
+                        field_diffs=diffs,
+                        spoken_reply=safe_reply,
+                    ).model_dump()
+                )
+
+            await self._stream_tts_reply(
+                safe_reply=safe_reply,
+                active_lang=active_lang,
+                effective_status=effective_status,
+                turn_start=turn_start,
+                asr_latency_ms=event.latency_ms,
+                llm_latency_ms=llm_latency_ms,
+            )
+            return
+
+        # Branch B: Standard Routine Home-Visit Voice Mode (ANC / NEWBORN / IMMUNISATION)
         # 2. Clinical Structured Extraction & Read-Back State Machine
         llm_start = time.perf_counter()
         patients = await self.db.list_patients()
@@ -233,7 +425,7 @@ class VoiceSessionOrchestrator:
         )
         safe_reply = compliance.safe_text
 
-        effective_status: SessionStatus = turn_result.status
+        effective_status = turn_result.status
         if danger_alerts and not turn_result.should_save:
             effective_status = "ESCALATED"
         self.status = effective_status
@@ -264,7 +456,7 @@ class VoiceSessionOrchestrator:
             await self._send_json(
                 WsVisitSavedEvent(visit=saved_visit, follow_up=saved_follow_up).model_dump()
             )
-            # Emit final SAVED form state before clearing draft for next house
+            # Emit final SAVED form state before clearing draft + baseline context for next house
             await self._send_json(
                 WsFormUpdateEvent(
                     status="SAVED",
@@ -273,6 +465,7 @@ class VoiceSessionOrchestrator:
                 ).model_dump()
             )
             self.draft = VisitDraft()
+            self.patient_context = None
             self.readback_completed = False
             self._turn_transcripts.clear()
         else:
@@ -288,37 +481,14 @@ class VoiceSessionOrchestrator:
             )
 
         # 5. Stream Synthesized 16kHz PCM Audio via Gnani Timbre v3.0 (Cancellable on Barge-In)
-        if safe_reply:
-            self._is_speaking = True
-            if effective_status == "AWAITING_CONFIRMATION":
-                self.status = "SPEAKING_READBACK"
-            tts_start = time.perf_counter()
-            first_audio_sent = False
-            try:
-                async for pcm_chunk in self.tts.synthesize_stream(
-                    text=safe_reply,
-                    language_code=active_lang,
-                ):
-                    if not first_audio_sent:
-                        first_audio_sent = True
-                        now = time.perf_counter()
-                        ttfa_ms = (now - turn_start) * 1000.0
-                        tts_first_ms = (now - tts_start) * 1000.0
-                        await self._send_json(
-                            WsMetricsEvent(
-                                ttfa_ms=round(ttfa_ms, 1),
-                                asr_latency_ms=round(event.latency_ms, 1),
-                                llm_latency_ms=round(llm_latency_ms, 1),
-                                tts_latency_ms=round(tts_first_ms, 1),
-                            ).model_dump()
-                        )
-                    await self._send_bytes(pcm_chunk)
-            except asyncio.CancelledError:
-                raise
-            finally:
-                self._is_speaking = False
-                if self.status == "SPEAKING_READBACK":
-                    self.status = "AWAITING_CONFIRMATION"
+        await self._stream_tts_reply(
+            safe_reply=safe_reply,
+            active_lang=active_lang,
+            effective_status=effective_status,
+            turn_start=turn_start,
+            asr_latency_ms=event.latency_ms,
+            llm_latency_ms=llm_latency_ms,
+        )
 
     async def _stt_listener_loop(self) -> None:
         """Consume partial and final STT transcripts concurrently."""
@@ -380,8 +550,11 @@ class VoiceSessionOrchestrator:
             if lang:
                 self.language_code = lang
                 await self.stt.update_language(lang)
+            register_id = msg.get("register_id")
             patient_id = msg.get("patient_id")
-            if patient_id:
+            if register_id:
+                await self._select_register(register_id)
+            elif patient_id:
                 await self._select_patient(patient_id)
             return
 
@@ -389,6 +562,12 @@ class VoiceSessionOrchestrator:
             patient_id = msg.get("patient_id")
             if patient_id:
                 await self._select_patient(patient_id)
+            return
+
+        if msg_type == "register_select":
+            register_id = msg.get("register_id")
+            if register_id:
+                await self._select_register(register_id)
             return
 
         if msg_type == "language_change":
@@ -409,14 +588,30 @@ class VoiceSessionOrchestrator:
 
         if msg_type == "reset_draft":
             await self.trigger_barge_in()
-            self.draft = VisitDraft()
-            self.patient_context = None
             self.readback_completed = False
             self._turn_transcripts.clear()
             self.status = "LISTENING"
-            await self._send_json(
-                WsFormUpdateEvent(status="LISTENING", record=self.draft).model_dump()
-            )
+            if msg.get("mode") == "visit" or self.active_register is None:
+                self.active_register = None
+                self.register_draft = None
+                self.draft = VisitDraft()
+                self.patient_context = None
+                await self._send_json(
+                    WsFormUpdateEvent(status="LISTENING", record=self.draft).model_dump()
+                )
+            else:
+                self.register_draft = RegisterIntakeDraft(
+                    register_id=self.active_register.id,
+                    register_name=self.active_register.name,
+                    category=self._infer_register_category(self.active_register.name),
+                    expected_fields=[f.field_name for f in self.active_register.fields],
+                )
+                await self._send_json(
+                    WsRegisterIntakeUpdateEvent(
+                        status="LISTENING",
+                        draft=self.register_draft,
+                    ).model_dump()
+                )
             return
 
         if msg_type == "text_turn":

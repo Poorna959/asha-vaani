@@ -197,3 +197,46 @@ def test_followup_calculator_routine_vs_escalated():
     assert urgent_fup.status == "ESCALATED"
     assert urgent_fup.due_date == "2026-11-21"
     assert "DS_MAT_BLEEDING" in urgent_fup.purpose
+
+
+async def test_offline_name_matching_avoids_surname_conflict_and_captures_walkin():
+    """Verify 'Priya Sharma' does NOT falsely match 'Priya Nair (Baby)' and walk-ins work offline."""
+    db = Database(":memory:")
+    await db.connect()
+    await db.seed_default_data()
+    roster = [p.model_dump() for p in await db.list_patients()]
+    await db.close()
+
+    engine = ClinicalStateEngine(provider=RuleBasedVisitExtractor())
+
+    # Conflicting surname: Priya Sharma != Priya Nair (Baby)
+    t1 = await engine.process_turn(
+        utterance="Priya Sharma ANC checkup weight 52 kilo",
+        current_draft=VisitDraft(),
+        language_code="en-IN",
+        roster=roster,
+    )
+    assert t1.updated_draft.beneficiary_id is None
+    assert t1.updated_draft.beneficiary_name == "Priya Sharma"
+    assert t1.updated_draft.visit_type == "ANC"
+    assert t1.updated_draft.weight_kg == 52.0
+
+    # Completely unseen walk-in patient via explicit cue
+    t2 = await engine.process_turn(
+        utterance="Patient Radha Bai ANC checkup weight 50 kilo",
+        current_draft=VisitDraft(),
+        language_code="en-IN",
+        roster=roster,
+    )
+    assert t2.updated_draft.beneficiary_id is None
+    assert t2.updated_draft.beneficiary_name == "Radha Bai"
+
+    # Legitimate first-name roster match WITHOUT conflicting surname still resolves
+    t3 = await engine.process_turn(
+        utterance="Sunita ANC checkup weight 54 kilo",
+        current_draft=VisitDraft(),
+        language_code="hi-IN",
+        roster=roster,
+    )
+    assert t3.updated_draft.beneficiary_id == "BEN-001"
+    assert t3.updated_draft.beneficiary_name == "Sunita Devi"

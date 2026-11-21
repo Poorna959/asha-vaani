@@ -15,7 +15,7 @@ from app.pipeline.compliance import ComplianceGuardrail
 from app.pipeline.danger_signs import DangerSignDetector
 from app.pipeline.gnani_stt import BaseSTTClient, create_stt_client
 from app.pipeline.gnani_tts import BaseTTSClient, create_tts_client
-from app.pipeline.llm import ClinicalStateEngine, GeminiVisitExtractor
+from app.pipeline.llm import ClinicalStateEngine, GeminiVisitExtractor, RegisterIntakeEngine
 from app.pipeline.session import VoiceSessionOrchestrator
 from app.routers.registers import router as registers_router
 from app.routers.visits import router as visits_router
@@ -46,6 +46,10 @@ def create_app(
                 model=cfg.gemini_model,
             )
         )
+        register_intake_engine = RegisterIntakeEngine(
+            api_key=cfg.gemini_api_key,
+            model=cfg.gemini_model,
+        )
 
         app.state.settings = cfg
         app.state.db = db
@@ -53,6 +57,7 @@ def create_app(
         app.state.danger_detector = danger_detector
         app.state.compliance_guardrail = compliance_guardrail
         app.state.clinical_engine = engine
+        app.state.register_intake_engine = register_intake_engine
         app.state.stt_factory = stt_factory or (lambda: create_stt_client(cfg))
         app.state.tts_factory = tts_factory or (lambda: create_tts_client(cfg))
 
@@ -99,6 +104,7 @@ def create_app(
             danger_detector=app.state.danger_detector,
             compliance_guardrail=app.state.compliance_guardrail,
             clinical_engine=app.state.clinical_engine,
+            register_intake_engine=app.state.register_intake_engine,
             stt_client=app.state.stt_factory(),
             tts_client=app.state.tts_factory(),
             settings=cfg,
