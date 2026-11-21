@@ -18,7 +18,11 @@ from typing import Literal, Optional
 from pydantic import BaseModel, Field
 
 from app.models import DangerSignAlert, LanguageCode
-from app.pipeline.danger_signs import DangerSignDetector, resolve_short_language
+from app.pipeline.danger_signs import (
+    DangerSignDetector,
+    resolve_short_language,
+    transliterate_indic_to_latin,
+)
 
 
 OverrideType = Literal[
@@ -101,8 +105,10 @@ DIAGNOSIS_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "diagnostic_indic",
         re.compile(
-            r"(?:यह\s+मलेरिया|प्री[\-\s]?एक्लैम्पसिया|इन्फेक्शन\s+है|संक्रमण\s+है|निमोनिया|"
-            r"ಇನ್ಫೆಕ್ಷನ್|ಮಲೇರಿಯಾ|ನ್ಯುಮೋನಿಯಾ|தொற்று\s+உள்ளது|மலேரியா|ఇన్ఫెక్షన్|మలేరియా)",
+            r"(?:यह\s+मलेरिया|प्री[\-\s]?एक्लैम्पसिया|इन्फेक्शन\s+है|संक्रमण\s+है|निमोनिया|सेप्सिस|"
+            r"ಇನ್ಫೆಕ್ಷನ್|ಮಲೇರಿಯಾ|ನ್ಯುಮೋನಿಯಾ|ಸೆಪ್ಸಿಸ್|ಪ್ರೀ[\-\s]?ಎಕ್ಲಾಂಪ್ಸಿಯಾ|"
+            r"தொற்று\s+உள்ளது|மலேரியா|நிமோனியா|செப்சிஸ்|"
+            r"ఇన్ఫెక్షన్|మలేరియా|న్యుమోనియా|సెప్సిస్)",
             re.IGNORECASE,
         ),
     ),
@@ -143,9 +149,9 @@ TREATMENT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         "treatment_indic",
         re.compile(
             r"(?:पैरासिटामोल|एंटीबायोटिक|दवाई\s+(?:दें|दे\s+दें|खिलाएं)|गोली\s+खिलाएं|घरेलू\s+उपाय|"
-            r"ಔಷಧಿ\s+ಕೊಡಿ|ಮಾತ್ರೆ\s+ಕೊಡಿ|ಮನೆಮದ್ದು|"
-            r"மருந்து\s+கொடு|மாத்திரை\s+கொடு|"
-            r"మందు\s+ఇవ్వండి|మాత్ర\s+ఇవ్వండి)",
+            r"ಪ್ಯಾರಾಸಿಟಮಾಲ್|ಆಂಟಿಬಯೋಟಿಕ್|ಔಷಧಿ\s+ಕೊಡಿ|ಮಾತ್ರೆ\s+ಕೊಡಿ|ಮನೆಮದ್ದು|"
+            r"பாராசிட்டமால்|ஆன்டிபயாடிக்|மருந்து\s+கொடு|மாத்திரை\s+கொடு|"
+            r"పారాసిటమాల్|యాంటీబయాటిక్|మందు\s+ఇవ్వండి|మాత్ర\s+ఇవ్వండి)",
             re.IGNORECASE,
         ),
     ),
@@ -154,17 +160,24 @@ TREATMENT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 # Adversarial user request patterns ("what medicine should I give?", "what disease is this?")
 USER_MEDICAL_ADVICE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(
-        r"(?<!\w)(?:what|which)\s+(?:medicine|medication|drug|tablet|pill|syrup|antibiotic|treatment|remedy|disease|condition|illness)"
-        r"|(?:should\s+i|can\s+i|how\s+much)\s+(?:give|administer|prescribe|treat|apply)"
-        r"|(?:diagnose|diagnosis|prescribe|suggest\s+(?:a\s+)?(?:medicine|treatment|remedy|dosage))"
-        r"|(?:is\s+(?:this|it|she)\s+(?:preeclampsia|eclampsia|malaria|infection|pneumonia|dengue|anemia|typhoid))(?!\w)",
+        r"(?<!\w)(?:what|which)\s+(?:medicine|medication|drug|tablet|pill|syrup|antibiotic|painkiller|treatment|remedy|dosage|dose|disease|condition|illness)"
+        r"|(?:should\s+(?:i|we|she|he)|can\s+(?:i|we|she|he)|how\s+much)\s+(?:give|take|administer|prescribe|treat|apply)"
+        r"|(?:diagnose|diagnosis|prescribe|treatment\s+plan|home\s+remedy|(?:suggest|recommend|tell\s+me)\s+(?:a\s+|the\s+|exact\s+)?(?:medicine|medication|drug|tablet|antibiotic|treatment|remedy|dosage|dose|diagnosis))"
+        r"|(?:(?:is\s+(?:this|it|she|he|the\s+baby)|does\s+(?:she|he|the\s+baby|the\s+mother|patient)\s+have)\s+(?:a\s+|an\s+)?"
+        r"(?:pre[\s\-]?eclampsia|eclampsia|malaria|infection|pneumonia|dengue|anemia|typhoid|sepsis|meningitis|jaundice|tuberculosis))"
+        r"|(?:paracetamol|acetaminophen|ibuprofen|aspirin|amoxicillin|azithromycin|antibiotic|antibiotics|dolo|crocin|calpol|misoprostol|oxytocin|methergine)(?!\w)",
         re.IGNORECASE,
     ),
     re.compile(
-        r"(?:कौन\s*सी\s*दवाई|क्या\s*दवाई\s*दूं|क्या\s*इलाज|kaun\s*si\s*dawai|kya\s*dawai\s*du|kya\s*bimari\s*hai|"
-        r"ಯಾವ\s*ಔಷಧಿ|yava\s*aushadhi|yaava\s*matre|"
-        r"என்ன\s*மருந்து|enna\s*marundhu|"
-        r"ఏ\s*మందు|em\s*mandu)",
+        r"(?:कौन\s*सी\s*(?:दवाई|गोली)|क्या\s*(?:दवाई|गोली)\s*दूं|क्या\s*इलाज|इलाज\s*बता(?:ओ|इए|एं)|"
+        r"क्या\s*(?:यह|ये)\s*(?:बीमारी|प्री[\-\s]?एक्लैम्पसिया|मलेरिया|इन्फेक्शन|सेप्सिस)|पैरासिटामोल|एंटीबायोटिक|"
+        r"kaun\s*si\s*(?:dawai|goli)|kya\s*(?:dawai|goli)\s*du|kya\s*bimari\s*hai|ilaj\s*batao|"
+        r"ಯಾವ\s*(?:ಔಷಧಿ|ಮಾತ್ರೆ)|ಔಷಧಿ\s*ಕೊಡಬಹುದಾ|ಮಾತ್ರೆ\s*ಕೊಡಬೇಕು|ಪ್ಯಾರಾಸಿಟಮಾಲ್|ಆಂಟಿಬಯೋಟಿಕ್|ಯಾವ\s*ಕಾಯಿಲೆ|ಚಿಕಿತ್ಸೆ\s*ಹೇಳಿ|"
+        r"yava\s*aushadhi|yaava\s*matre|yava\s*kayile|"
+        r"என்ன\s*(?:மருந்து|மாத்திரை|நோய்)|மாத்திரை\s*கொடுக்கலாமா|மருந்து\s*கொடுக்கலாமா|பாராசிட்டமால்|ஆன்டிபயாடிக்|சிகிச்சை\s*சொல்லு|"
+        r"enna\s*marundhu|enna\s*mathirai|enna\s*noi|"
+        r"ఏ\s*(?:మందు|మాత్ర|వ్యాధి)|మాత్ర\s*ఇవ్వాలి|మందు\s*ఇవ్వవచ్చా|పారాసిటమాల్|యాంటీబయాటిక్|చికిత్స\s*చెప్పండి|"
+        r"em\s*mandu|em\s*mathra|em\s*vyadhi)",
         re.IGNORECASE,
     ),
 )
@@ -176,29 +189,44 @@ class ComplianceGuardrail:
     def __init__(self, danger_detector: Optional[DangerSignDetector] = None) -> None:
         self.danger_detector = danger_detector or DangerSignDetector()
 
+    @staticmethod
+    def _candidate_texts(text: str) -> list[str]:
+        candidates = [text]
+        translit = transliterate_indic_to_latin(text)
+        if translit and translit != text.lower():
+            candidates.append(translit)
+        return candidates
+
     def is_medical_advice_request(self, user_utterance: str) -> bool:
         """Return True if the caller is asking for a diagnosis or treatment/medicine advice."""
         if not user_utterance:
             return False
-        return any(pattern.search(user_utterance) for pattern in USER_MEDICAL_ADVICE_PATTERNS)
+        for candidate in self._candidate_texts(user_utterance):
+            if any(pattern.search(candidate) for pattern in USER_MEDICAL_ADVICE_PATTERNS):
+                return True
+        return False
 
     def scan_proposed_reply(self, proposed_reply: str) -> tuple[Optional[OverrideType], list[str]]:
         """Inspect proposed LLM reply for diagnostic or treatment violations."""
         reasons: list[str] = []
         override: Optional[OverrideType] = None
+        seen_labels: set[str] = set()
 
-        for label, pattern in TREATMENT_PATTERNS:
-            match = pattern.search(proposed_reply)
-            if match:
-                reasons.append(f"{label}: '{match.group(0)}'")
-                override = "TREATMENT_BLOCKED"
+        for candidate in self._candidate_texts(proposed_reply):
+            for label, pattern in TREATMENT_PATTERNS:
+                match = pattern.search(candidate)
+                if match and label not in seen_labels:
+                    seen_labels.add(label)
+                    reasons.append(f"{label}: '{match.group(0)}'")
+                    override = "TREATMENT_BLOCKED"
 
-        for label, pattern in DIAGNOSIS_PATTERNS:
-            match = pattern.search(proposed_reply)
-            if match:
-                reasons.append(f"{label}: '{match.group(0)}'")
-                if override is None:
-                    override = "DIAGNOSIS_BLOCKED"
+            for label, pattern in DIAGNOSIS_PATTERNS:
+                match = pattern.search(candidate)
+                if match and label not in seen_labels:
+                    seen_labels.add(label)
+                    reasons.append(f"{label}: '{match.group(0)}'")
+                    if override is None:
+                        override = "DIAGNOSIS_BLOCKED"
 
         return override, reasons
 
