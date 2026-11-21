@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 import json
 import logging
 import time
@@ -97,19 +98,25 @@ class GnaniPrismaSTTClient(BaseSTTClient):
         ws_url: Optional[str] = None,
         sample_rate: int = 16000,
         model: str = "prisma-v3.0",
+        flush_silence_ms: int = 960,
     ) -> None:
         settings = get_settings()
         self.api_key = api_key if api_key is not None else settings.gnani_api_key
         self.ws_url = ws_url or settings.gnani_stt_ws_url
         self.sample_rate = sample_rate
         self.model = model
+        self.flush_silence_ms = flush_silence_ms
         self.language_code: str = "indic-auto"
         self.keyterms: list[str] = list(ASHA_CLINICAL_KEYTERMS)
         self._ws: Any = None
         self._last_audio_ts: float = 0.0
         self._closed: bool = False
         self._reconnecting: bool = False
+        self._server_vad_connected: bool = False
+        self._has_unflushed_speech: bool = False
+        self._recent_speech_frames: deque[bytes] = deque(maxlen=25)
         self._connect_lock: asyncio.Lock = asyncio.Lock()
+        self._send_lock: asyncio.Lock = asyncio.Lock()
         self._ws_ready: asyncio.Event = asyncio.Event()
 
     async def _open_socket(self) -> None:
@@ -124,6 +131,9 @@ class GnaniPrismaSTTClient(BaseSTTClient):
             self.ws_url,
             additional_headers=headers,
             max_size=4 * 1024 * 1024,
+            open_timeout=15,
+            ping_interval=15,
+            ping_timeout=15,
         )
         # Send initial Prisma v3.0 keyterm & audio configuration control frame
         await ws.send(
@@ -138,6 +148,7 @@ class GnaniPrismaSTTClient(BaseSTTClient):
                 }
             )
         )
+        self._server_vad_connected = False
         self._ws = ws
         self._ws_ready.set()
 
@@ -147,13 +158,14 @@ class GnaniPrismaSTTClient(BaseSTTClient):
                 return
             self._reconnecting = True
             try:
-                if self._ws is not None:
+                old_ws = self._ws
+                self._ws = None
+                self._ws_ready.clear()
+                if old_ws is not None:
                     try:
-                        await self._ws.close(code=1000, reason=close_reason)
+                        await old_ws.close(code=1000, reason=close_reason)
                     except Exception:
                         pass
-                    self._ws = None
-                self._ws_ready.clear()
                 await self._open_socket()
             finally:
                 self._reconnecting = False
@@ -167,6 +179,8 @@ class GnaniPrismaSTTClient(BaseSTTClient):
         if keyterms is not None:
             self.keyterms = list(keyterms)
         self._closed = False
+        self._has_unflushed_speech = False
+        self._recent_speech_frames.clear()
         async with self._connect_lock:
             await self._open_socket()
 
@@ -174,57 +188,96 @@ class GnaniPrismaSTTClient(BaseSTTClient):
         if self._closed or not pcm_bytes:
             return
         self._last_audio_ts = time.perf_counter()
-        if self._ws is None:
-            await self._reconnect()
-        try:
-            if self._ws is not None:
-                await self._ws.send(pcm_bytes)
-        except Exception as exc:
+        is_speech_payload = any(pcm_bytes)
+        if is_speech_payload:
+            self._has_unflushed_speech = True
+            self._recent_speech_frames.append(pcm_bytes)
+
+        async with self._send_lock:
             if self._closed:
                 return
-            logger.info("Prisma STT socket reconnecting after idle/close (%s)", exc)
-            await self._reconnect()
-            if self._ws is not None:
-                await self._ws.send(pcm_bytes)
+            reconnected = False
+            if self._ws is None:
+                await self._reconnect()
+                reconnected = True
+
+            try:
+                if self._ws is None:
+                    return
+                if reconnected and is_speech_payload and len(self._recent_speech_frames) > 1:
+                    # Replay buffered speech onset frames so opening words are never clipped on reconnect
+                    for frame in list(self._recent_speech_frames):
+                        await self._ws.send(frame)
+                else:
+                    await self._ws.send(pcm_bytes)
+            except Exception as exc:
+                if self._closed:
+                    return
+                logger.info("Prisma STT socket reconnecting after idle/close (%s)", exc)
+                await self._reconnect()
+                if self._ws is not None:
+                    if is_speech_payload and self._recent_speech_frames:
+                        for frame in list(self._recent_speech_frames):
+                            await self._ws.send(frame)
+                    else:
+                        await self._ws.send(pcm_bytes)
 
     async def finalize_turn(self) -> None:
         if self._ws is None or self._closed:
             return
-        try:
-            await self._ws.send(json.dumps({"type": "finalize"}))
-        except Exception as exc:  # pragma: no cover
-            logger.debug("Prisma finalize control frame skipped: %s", exc)
+        async with self._send_lock:
+            if self._ws is None or self._closed:
+                return
+            try:
+                await self._ws.send(json.dumps({"type": "finalize"}))
+            except Exception as exc:  # pragma: no cover
+                logger.debug("Prisma finalize control frame skipped: %s", exc)
+                return
+
+            # Live Prisma v3.0 VAD service ignores JSON {"type": "finalize"} and only flushes
+            # the active utterance after ~800-960ms of trailing silence PCM. Burst-send clean
+            # digital zero-PCM (~120ms wall-clock) when flushing active speech so the transcript
+            # arrives immediately instead of buffering blank until the next recording session.
+            if self._server_vad_connected and self._has_unflushed_speech and self.flush_silence_ms > 0:
+                self._has_unflushed_speech = False
+                self._recent_speech_frames.clear()
+                chunk_ms = 40
+                chunk_bytes = int(self.sample_rate * chunk_ms / 1000) * 2  # 1280 bytes @ 16kHz
+                zero_chunk = b"\x00" * chunk_bytes
+                num_chunks = max(1, (self.flush_silence_ms + chunk_ms - 1) // chunk_ms)
+                try:
+                    for _ in range(num_chunks):
+                        if self._ws is None or self._closed:
+                            break
+                        await self._ws.send(zero_chunk)
+                        await asyncio.sleep(0.005)
+                except Exception as exc:  # pragma: no cover
+                    logger.debug("Prisma trailing silence flush interrupted: %s", exc)
 
     async def update_language(self, language_code: LanguageCode | str) -> None:
         new_lang = str(language_code)
-        changed = new_lang != self.language_code
         self.language_code = new_lang
         if self._ws is None or self._closed:
             return
-        if changed:
-            # Reconnect Prisma v3.0 so the new language_code is locked in WS handshake headers
-            try:
-                await self._reconnect(close_reason="language_change")
+        # Prisma v3.0 applies language_code updates live via update_settings in ~50ms
+        # without closing/reconnecting the WebSocket (avoids 1-4.5s reconnect blank gaps).
+        async with self._send_lock:
+            if self._ws is None or self._closed:
                 return
-            except Exception as exc:
-                logger.info("Prisma STT language-switch reconnect deferred (%s)", exc)
+            try:
+                await self._ws.send(
+                    json.dumps(
+                        {
+                            "type": "update_settings",
+                            "language_code": self.language_code,
+                            "keyterms": self.keyterms,
+                        }
+                    )
+                )
+            except Exception:
+                # Socket closed while idle; next send_audio will reconnect with updated language_code header
                 self._ws = None
                 self._ws_ready.clear()
-                return
-        try:
-            await self._ws.send(
-                json.dumps(
-                    {
-                        "type": "update_settings",
-                        "language_code": self.language_code,
-                        "keyterms": self.keyterms,
-                    }
-                )
-            )
-        except Exception:
-            # Socket closed while idle; next send_audio will reconnect with updated language_code
-            self._ws = None
-            self._ws_ready.clear()
 
     async def transcripts(self) -> AsyncIterator[TranscriptEvent]:
         while not self._closed:
@@ -245,6 +298,11 @@ class GnaniPrismaSTTClient(BaseSTTClient):
                     except json.JSONDecodeError:
                         continue
 
+                    msg_type = str(data.get("type", "")).lower()
+                    if msg_type == "connected":
+                        self._server_vad_connected = True
+                        continue
+
                     text = (
                         data.get("transcript")
                         or data.get("text")
@@ -257,8 +315,12 @@ class GnaniPrismaSTTClient(BaseSTTClient):
                     is_final = bool(
                         data.get("is_final")
                         if "is_final" in data
-                        else data.get("final", data.get("type") == "final_transcript")
+                        else data.get("final", msg_type == "final_transcript")
                     )
+                    if is_final:
+                        self._has_unflushed_speech = False
+                        self._recent_speech_frames.clear()
+
                     detected_lang = str(
                         data.get("detected_language_code")
                         or data.get("language_code")
@@ -282,13 +344,18 @@ class GnaniPrismaSTTClient(BaseSTTClient):
                         confidence=confidence,
                         latency_ms=round(latency_ms, 1),
                     )
-                # Normal WebSocket closure (1000 OK without idle/language-switch reconnect) ends stream cleanly.
+                # Never exit the listener if a newer WebSocket has already replaced current_ws.
                 close_code = getattr(current_ws, "close_code", None)
                 close_reason = str(getattr(current_ws, "close_reason", "") or "").lower()
+                replaced_by_newer_socket = self._ws is not None and self._ws is not current_ws
+                is_reconnect_close = any(
+                    tok in close_reason
+                    for tok in ("idle", "timeout", "language_change", "reconnect")
+                )
                 if (
-                    close_code == 1000
-                    and "idle" not in close_reason
-                    and "language_change" not in close_reason
+                    not replaced_by_newer_socket
+                    and close_code == 1000
+                    and not is_reconnect_close
                     and not self._reconnecting
                 ):
                     should_exit = True

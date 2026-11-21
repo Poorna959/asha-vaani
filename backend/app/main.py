@@ -61,6 +61,10 @@ def create_app(
             groq_base_url=cfg.groq_base_url,
             llm_provider=cfg.llm_provider,
         )
+        # Share HTTP 429 cooldown state across routine visit extraction and custom register intake
+        provider_cooldowns = getattr(engine.provider, "_model_cooldowns", None)
+        if isinstance(provider_cooldowns, dict):
+            register_intake_engine._model_cooldowns = provider_cooldowns
 
         app.state.settings = cfg
         app.state.db = db

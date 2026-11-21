@@ -45,7 +45,10 @@ class PcmAudioCapturer(
     private var noiseSuppressor: NoiseSuppressor? = null
     private var gainControl: AutomaticGainControl? = null
 
+    private val chunkerLock = Any()
     private val chunker = PcmFrameChunker(PcmAudioConfig.FRAME_BYTES)
+    @Volatile
+    private var activeFrameCallback: ((ByteArray) -> Unit)? = null
 
     /**
      * Start capturing 16kHz mono 16-bit PCM and delivering exact 20ms (640-byte) frames.
@@ -90,7 +93,8 @@ class PcmAudioCapturer(
 
         audioRecord = record
         attachHardwareDspEffects(record.audioSessionId)
-        chunker.reset()
+        synchronized(chunkerLock) { chunker.reset() }
+        activeFrameCallback = onFrame
 
         try {
             record.startRecording()
@@ -110,7 +114,13 @@ class PcmAudioCapturer(
                 while (isActive && _isCapturing.value) {
                     val bytesRead = record.read(readBuffer, 0, readBuffer.size)
                     if (bytesRead > 0) {
-                        chunker.push(readBuffer, bytesRead) { frame640 ->
+                        val readyFrames = ArrayList<ByteArray>(4)
+                        synchronized(chunkerLock) {
+                            chunker.push(readBuffer, bytesRead) { frame640 ->
+                                readyFrames.add(frame640)
+                            }
+                        }
+                        for (frame640 in readyFrames) {
                             val instantRms = PcmFrameProcessor.computeNormalizedRms(frame640)
                             smoothedRms = PcmFrameProcessor.smoothRms(smoothedRms, instantRms)
                             _rmsLevel.value = smoothedRms
@@ -135,9 +145,21 @@ class PcmAudioCapturer(
     }
 
     fun stop() {
+        val wasCapturing = _isCapturing.value
         _isCapturing.value = false
         captureJob?.cancel()
         captureJob = null
+        if (wasCapturing) {
+            val cb = activeFrameCallback
+            if (cb != null) {
+                var trailing: ByteArray? = null
+                synchronized(chunkerLock) {
+                    chunker.flushZeroPadded { frame -> trailing = frame }
+                }
+                trailing?.let { runCatching { cb(it) } }
+            }
+        }
+        activeFrameCallback = null
         _rmsLevel.value = 0f
         cleanupAudioResources()
     }

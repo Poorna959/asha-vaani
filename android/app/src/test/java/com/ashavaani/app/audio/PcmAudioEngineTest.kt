@@ -149,4 +149,59 @@ class PcmAudioEngineTest {
         assertEquals("English", en.nativeLabel)
         assertEquals("en-IN", en.code)
     }
+
+    @Test
+    fun `acoustic echo gate suppresses loudspeaker self-capture during TTS and reverb tail while keeping headset full-duplex`() {
+        val gate = AcousticEchoGate(holdoffMs = 400L)
+
+        // 1. Suppresses while built-in loudspeaker is actively playing TTS
+        assertTrue(
+            gate.shouldSuppressMicFrame(
+                isAgentSpeaking = true,
+                isLoudspeakerActive = true,
+                lastPlaybackEndedAtMs = 0L,
+                nowMs = 1_000L,
+            )
+        )
+
+        // 2. Suppresses during 400ms acoustic room-reverb tail after TTS finishes naturally
+        assertTrue(
+            gate.shouldSuppressMicFrame(
+                isAgentSpeaking = false,
+                isLoudspeakerActive = true,
+                lastPlaybackEndedAtMs = 1_000L,
+                nowMs = 1_250L,
+            )
+        )
+
+        // 3. Opens cleanly once holdoff expires so ASHA worker's reply captures with zero latency
+        assertTrue(
+            !gate.shouldSuppressMicFrame(
+                isAgentSpeaking = false,
+                isLoudspeakerActive = true,
+                lastPlaybackEndedAtMs = 1_000L,
+                nowMs = 1_450L,
+            )
+        )
+
+        // 4. Opens immediately (0ms holdoff) after explicit barge-in flush (lastPlaybackEndedAtMs == 0L)
+        assertTrue(
+            !gate.shouldSuppressMicFrame(
+                isAgentSpeaking = false,
+                isLoudspeakerActive = true,
+                lastPlaybackEndedAtMs = 0L,
+                nowMs = 1_001L,
+            )
+        )
+
+        // 5. Completely transparent when wired/Bluetooth headset is active (no speaker echo)
+        assertTrue(
+            !gate.shouldSuppressMicFrame(
+                isAgentSpeaking = true,
+                isLoudspeakerActive = false,
+                lastPlaybackEndedAtMs = 0L,
+                nowMs = 1_000L,
+            )
+        )
+    }
 }

@@ -282,23 +282,30 @@ async def test_live_timbre_v3_nested_data_audio_and_lakshmi_voice():
 
 
 @pytest.mark.asyncio
-async def test_p307_prisma_stt_update_language_reconnects_with_locked_header():
-    """Verify P3-07: switching language reconnects Prisma STT with the new language_code header."""
+async def test_p307_prisma_stt_update_language_switches_live_without_reconnect_stall():
+    """Verify live in-place language switching via update_settings (no 4.5s reconnect blank gap)."""
     seen_header_langs: list[str] = []
+    seen_settings_langs: list[str] = []
+    active_lang = ["indic-auto"]
 
     async def fake_prisma(ws):
-        seen_header_langs.append(ws.request.headers.get("language_code", ""))
+        header_lang = ws.request.headers.get("language_code", "")
+        seen_header_langs.append(header_lang)
+        active_lang[0] = header_lang
         async for msg in ws:
             if isinstance(msg, bytes):
                 continue
             data = json.loads(msg)
-            if data.get("type") == "finalize":
+            if data.get("type") == "update_settings" and data.get("language_code"):
+                active_lang[0] = data["language_code"]
+                seen_settings_langs.append(active_lang[0])
+            elif data.get("type") == "finalize":
                 await ws.send(
                     json.dumps(
                         {
                             "transcript": "Sunita Devi weight 54 kilo",
                             "is_final": True,
-                            "language_code": ws.request.headers.get("language_code", ""),
+                            "language_code": active_lang[0],
                         }
                     )
                 )
@@ -308,12 +315,101 @@ async def test_p307_prisma_stt_update_language_reconnects_with_locked_header():
         port = server.sockets[0].getsockname()[1]
         client = GnaniPrismaSTTClient(api_key="live-key", ws_url=f"ws://127.0.0.1:{port}")
         await client.connect(language_code="indic-auto")
-        # Switch to en-IN -> must reconnect with en-IN in handshake headers
+        # Switch to en-IN live via update_settings (single persistent socket, zero reconnect stall!)
         await client.update_language("en-IN")
         await client.finalize_turn()
         events = [ev async for ev in client.transcripts()]
         await client.close()
 
-    assert seen_header_langs == ["indic-auto", "en-IN"]
+    assert seen_header_langs == ["indic-auto"]
+    assert seen_settings_langs == ["indic-auto", "en-IN"]
     assert len(events) == 1
     assert events[0].language == "en-IN"
+
+
+@pytest.mark.asyncio
+async def test_prisma_stt_finalize_flushes_digital_silence_for_server_vad_and_survives_reconnect():
+    """Verify Prisma VAD server gets trailing zero-PCM on finalize_turn() and transcripts() never dies on reconnect."""
+    conn_count = 0
+    zero_bytes_after_finalize = 0
+    seen_headers: list[str] = []
+
+    async def fake_prisma_vad(ws):
+        nonlocal conn_count, zero_bytes_after_finalize
+        conn_count += 1
+        my_conn = conn_count
+        seen_headers.append(ws.request.headers.get("language_code", ""))
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "connected",
+                    "message": "STT service ready — VAD service connected",
+                    "config": {"sample_rate": 16000, "chunk_size": 512, "language_code": seen_headers[-1]},
+                }
+            )
+        )
+        got_finalize = False
+        async for msg in ws:
+            if isinstance(msg, bytes):
+                if got_finalize and not any(msg):
+                    zero_bytes_after_finalize += len(msg)
+                    if zero_bytes_after_finalize >= 25600:  # >= 800ms of zero-PCM flush
+                        await ws.send(
+                            json.dumps(
+                                {
+                                    "type": "transcript",
+                                    "text": f"Turn {my_conn} Sunita Devi weight 54 kilo",
+                                    "is_final": True,
+                                    "detected_language_code": seen_headers[-1],
+                                }
+                            )
+                        )
+                        if my_conn == 1:
+                            # Simulate upstream idle close between recording sessions!
+                            await ws.close(code=1001, reason="idle_timeout")
+                            return
+                        else:
+                            await ws.close(code=1000, reason="")
+                            return
+            else:
+                data = json.loads(msg)
+                if data.get("type") == "finalize":
+                    got_finalize = True
+
+    async with websockets.serve(fake_prisma_vad, "127.0.0.1", 0) as server:
+        port = server.sockets[0].getsockname()[1]
+        client = GnaniPrismaSTTClient(
+            api_key="live-key",
+            ws_url=f"ws://127.0.0.1:{port}",
+            flush_silence_ms=960,
+        )
+        await client.connect(language_code="en-IN")
+        collected = []
+
+        async def consume():
+            async for ev in client.transcripts():
+                collected.append(ev)
+
+        consumer = asyncio.create_task(consume())
+        await asyncio.sleep(0.05)  # allow "connected" frame to mark server VAD ready
+
+        # Session 1: stream speech bytes then abrupt finalize_turn()
+        await client.send_audio(b"\x10\x20" * 320)
+        await client.finalize_turn()
+        await asyncio.sleep(0.25)
+
+        # Session 2 after upstream 1001 idle_timeout: switch language & stream again!
+        await client.update_language("hi-IN")
+        zero_bytes_after_finalize = 0
+        await client.send_audio(b"\x30\x40" * 320)
+        await asyncio.sleep(0.05)
+        await client.finalize_turn()
+        await asyncio.wait_for(consumer, timeout=3.0)
+        await client.close()
+
+    assert conn_count == 2
+    assert seen_headers == ["en-IN", "hi-IN"]
+    assert len(collected) == 2
+    assert "Turn 1" in collected[0].text
+    assert "Turn 2" in collected[1].text
+    assert collected[1].language == "hi-IN"

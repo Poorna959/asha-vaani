@@ -34,7 +34,7 @@ class Settings(BaseSettings):
 
     # Audio & VAD Configuration
     sample_rate: int = 16000
-    vad_silence_tail_ms: int = 550
+    vad_silence_tail_ms: int = 850
     vad_speech_threshold: float = 0.5
 
     # Server & Database Configuration

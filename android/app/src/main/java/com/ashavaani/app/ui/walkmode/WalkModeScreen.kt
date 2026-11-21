@@ -275,6 +275,9 @@ fun WalkModeScreen(
                 partialTranscript = uiState.partialTranscript,
                 finalTranscript = uiState.finalTranscript,
                 agentReadback = uiState.agentReadback,
+                isMicActive = uiState.isMicActive,
+                rmsLevel = uiState.rmsLevel,
+                sessionStatus = uiState.sessionStatus,
                 isAgentSpeaking = uiState.isAgentSpeaking,
                 isIntakeMode = uiState.inputMode == WalkInputMode.REGISTER_INTAKE,
             )
@@ -795,10 +798,19 @@ private fun TranscriptAndReadbackCard(
     partialTranscript: String,
     finalTranscript: String,
     agentReadback: String,
+    isMicActive: Boolean,
+    rmsLevel: Float,
+    sessionStatus: String,
     isAgentSpeaking: Boolean,
     isIntakeMode: Boolean,
 ) {
-    val hasSpeech = partialTranscript.isNotBlank() || finalTranscript.isNotBlank() || agentReadback.isNotBlank()
+    val isCapturingVoice = isMicActive && !isAgentSpeaking && rmsLevel > 0.14f
+    val isProcessing = sessionStatus.equals("PROCESSING", ignoreCase = true)
+    val hasSpeech = partialTranscript.isNotBlank() ||
+        finalTranscript.isNotBlank() ||
+        agentReadback.isNotBlank() ||
+        isMicActive ||
+        isProcessing
     if (!hasSpeech) {
         Surface(
             modifier = Modifier.fillMaxWidth(),
@@ -829,30 +841,74 @@ private fun TranscriptAndReadbackCard(
     }
 
     SunlitCard(modifier = Modifier.fillMaxWidth()) {
-        if (partialTranscript.isNotBlank() || finalTranscript.isNotBlank()) {
-            Text(
-                text = "YOU SPOKE (PRISMA v3.0)",
-                style = MaterialTheme.typography.labelSmall,
-            )
+        if (partialTranscript.isNotBlank() || finalTranscript.isNotBlank() || isMicActive || isProcessing) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "YOU SPOKE (PRISMA v3.0)",
+                    style = MaterialTheme.typography.labelSmall,
+                )
+                when {
+                    isProcessing -> StatusPill(
+                        text = "PROCESSING",
+                        containerColor = AshaColors.ClinicalTealTint,
+                        contentColor = AshaColors.ClinicalTeal,
+                    )
+                    isCapturingVoice -> StatusPill(
+                        text = "● CAPTURING",
+                        containerColor = AshaColors.DangerBadgeSurface,
+                        contentColor = AshaColors.DangerCrimson,
+                    )
+                    isMicActive && !isAgentSpeaking -> StatusPill(
+                        text = "● LISTENING",
+                        containerColor = AshaColors.ClinicalTealTint,
+                        contentColor = AshaColors.ClinicalTeal,
+                    )
+                }
+            }
             Spacer(modifier = Modifier.height(4.dp))
-            if (partialTranscript.isNotBlank()) {
-                Text(
-                    text = "$partialTranscript...",
-                    style = MaterialTheme.typography.bodyMedium.copy(
-                        fontStyle = FontStyle.Italic,
-                        color = AshaColors.InkMuted,
-                    ),
-                )
-            } else {
-                Text(
-                    text = "“$finalTranscript”",
-                    style = MaterialTheme.typography.bodyLarge,
-                )
+            when {
+                partialTranscript.isNotBlank() -> {
+                    Text(
+                        text = "$partialTranscript...",
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            fontStyle = FontStyle.Italic,
+                            color = AshaColors.InkMuted,
+                        ),
+                    )
+                }
+                finalTranscript.isNotBlank() -> {
+                    Text(
+                        text = "“$finalTranscript”",
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                }
+                isProcessing -> {
+                    Text(
+                        text = "Understanding what you said...",
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            fontStyle = FontStyle.Italic,
+                            color = AshaColors.InkMuted,
+                        ),
+                    )
+                }
+                else -> {
+                    Text(
+                        text = if (isCapturingVoice) "Listening to your voice..." else "Speak clearly now...",
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            fontStyle = FontStyle.Italic,
+                            color = AshaColors.InkMuted,
+                        ),
+                    )
+                }
             }
         }
 
         if (agentReadback.isNotBlank()) {
-            if (partialTranscript.isNotBlank() || finalTranscript.isNotBlank()) {
+            if (partialTranscript.isNotBlank() || finalTranscript.isNotBlank() || isMicActive || isProcessing) {
                 Spacer(modifier = Modifier.height(10.dp))
                 HorizontalDivider(color = AshaColors.DividerSubtle)
                 Spacer(modifier = Modifier.height(10.dp))
@@ -873,7 +929,7 @@ private fun TranscriptAndReadbackCard(
                     ) {
                         SpeakingWaveformBars()
                         Text(
-                            text = "Speak to interrupt",
+                            text = "Tap mic to interrupt",
                             color = AshaColors.ClinicalTeal,
                             style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
                         )
@@ -1147,7 +1203,7 @@ private fun OneThumbMicDock(
 
             Text(
                 text = when {
-                    isAgentSpeaking -> "Reading back · Tap or speak to barge-in"
+                    isAgentSpeaking -> "Reading back · Tap mic to interrupt"
                     isMicActive -> "Listening · Auto-VAD Active"
                     else -> "Tap to Start Hands-Free Mic"
                 },

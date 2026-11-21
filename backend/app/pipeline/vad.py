@@ -35,10 +35,10 @@ class AdaptiveEndpointVAD:
     def __init__(
         self,
         sample_rate: int = 16000,
-        silence_tail_ms: int = 550,
+        silence_tail_ms: int = 850,
         speech_threshold: float = 0.5,
-        min_speech_ms: int = 60,
-        min_rms_floor: float = 0.015,
+        min_speech_ms: int = 80,
+        min_rms_floor: float = 0.020,
         snr_ratio: float = 2.6,
         silero_model_path: Optional[Path] = None,
     ) -> None:

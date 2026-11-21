@@ -200,3 +200,35 @@ class PlaybackQueueController {
 
     fun size(): Int = max(0, pendingChunks)
 }
+
+/**
+ * Pure-Kotlin loudspeaker echo gate (JVM unit-testable without hardware).
+ *
+ * Because `PcmAudioPlayer` routes read-backs to the loud bottom speaker via `USAGE_MEDIA` + 1.85x
+ * outdoor gain (outside Android's `VOICE_COMMUNICATION` AEC reference on many OEM devices), raw
+ * speaker output can otherwise loop back into the mic and cause phantom transcripts or false
+ * self-barge-in. This gate suppresses upstream mic frames ONLY while the built-in loudspeaker is
+ * actively playing TTS plus a brief room-reverb tail ([holdoffMs]). External headsets remain
+ * 100% full-duplex, and explicit tap-to-interrupt clears [lastPlaybackEndedAtMs] to 0L for
+ * immediate 0ms capture resumption.
+ */
+class AcousticEchoGate(
+    val holdoffMs: Long = DEFAULT_HOLDOFF_MS,
+) {
+    fun shouldSuppressMicFrame(
+        isAgentSpeaking: Boolean,
+        isLoudspeakerActive: Boolean,
+        lastPlaybackEndedAtMs: Long,
+        nowMs: Long,
+    ): Boolean {
+        if (!isLoudspeakerActive) return false
+        if (isAgentSpeaking) return true
+        if (lastPlaybackEndedAtMs <= 0L) return false
+        val elapsedSinceEnd = nowMs - lastPlaybackEndedAtMs
+        return elapsedSinceEnd in 0L until holdoffMs
+    }
+
+    companion object {
+        const val DEFAULT_HOLDOFF_MS: Long = 400L
+    }
+}

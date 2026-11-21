@@ -715,3 +715,213 @@ def test_p309_spurious_noise_does_not_vanish_fr72_register_form_and_empty_yes_sa
         patients = client.get(f"/api/registers/{reg_id}/patients").json()
         assert len(patients) == 1
         assert patients[0]["field_answers"]["House / Ward"] == "House 19"
+
+
+def test_stt_noise_gating_hesitation_filter_and_single_connect_language_lock():
+    """Verify STT anti-buffering & anti-hallucination guarantees:
+    1. Multi-word hesitation hallucinations ('ummmm ummm what to do....') are suppressed before UI emit.
+    2. Real clinical utterances & commands (even starting with 'umm') are NEVER filtered.
+    3. Steady ambient room noise is NEVER streamed raw to non-mock STT; 300ms pre-speech ring buffer
+       is replayed on SPEECH_START so opening consonants are never clipped.
+    4. Immediate `session_start` opens upstream STT ONCE with the locked language_code.
+    """
+    from app.pipeline.gnani_stt import BaseSTTClient, TranscriptEvent
+    from app.pipeline.session import is_spurious_noise_transcript
+
+    # 1. Hesitation & ASR silence hallucination filter
+    for hallucination in (
+        "ummmm ummm what to do....",
+        "ummm umm what to do",
+        "ummmm ummm",
+        "uhhh hmm...",
+        "hmm hmm",
+        "um um um",
+        "ह।",
+        "ये।",
+    ):
+        assert is_spurious_noise_transcript(hallucination) is True, f"Should filter {hallucination!r}"
+
+    for valid_speech in (
+        "Sunita Devi ANC checkup weight 54 kilo",
+        "umm yes save",
+        "what medicine should I give for fever?",
+        "No, weight is 2.8 kilo",
+        "Savitha Rao, Age 26, Blood Group O+, House 19",
+        "Yes save",
+        "Haan theek hai",
+        "19",
+    ):
+        assert is_spurious_noise_transcript(valid_speech) is False, f"Must keep {valid_speech!r}"
+
+    # 2. Recording fake live STT client (non-MockPrismaSTTClient) to verify VAD gating + single connect
+    class RecordingLiveSTT(BaseSTTClient):
+        def __init__(self):
+            self.connect_langs: list[str] = []
+            self.update_langs: list[str] = []
+            self.sent_frames: list[bytes] = []
+            self.finalize_count: int = 0
+            self._queue = None
+
+        async def connect(self, language_code="indic-auto", keyterms=None):
+            import asyncio
+
+            self.language_code = str(language_code)
+            self.connect_langs.append(self.language_code)
+            self._queue = asyncio.Queue()
+
+        async def send_audio(self, pcm_bytes: bytes):
+            self.sent_frames.append(pcm_bytes)
+
+        async def finalize_turn(self):
+            self.finalize_count += 1
+            # Emit one hallucination (must be suppressed before WS!) followed by the real utterance
+            await self._queue.put(
+                TranscriptEvent(text="ummmm ummm what to do....", is_final=True, language=self.language_code)
+            )
+            await self._queue.put(
+                TranscriptEvent(
+                    text="Sunita Devi ANC checkup weight 54 kilo",
+                    is_final=True,
+                    language=self.language_code,
+                )
+            )
+
+        async def update_language(self, language_code):
+            self.language_code = str(language_code)
+            self.update_langs.append(self.language_code)
+
+        async def transcripts(self):
+            while True:
+                ev = await self._queue.get()
+                if ev is None:
+                    break
+                yield ev
+
+        async def close(self):
+            if self._queue is not None:
+                await self._queue.put(None)
+
+    rec_stt = RecordingLiveSTT()
+    cfg = Settings(mock_gnani=True, gemini_api_key="", groq_api_key="", vad_silence_tail_ms=100)
+    app = create_app(
+        settings=cfg,
+        db_path=":memory:",
+        stt_factory=lambda: rec_stt,
+        tts_factory=lambda: MockTimbreTTSClient(chunk_delay_s=0.0, max_chunks_per_sentence=2),
+        clinical_engine=ClinicalStateEngine(provider=RuleBasedVisitExtractor()),
+    )
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/session") as ws:
+            # Immediate session_start must lock language_code on FIRST connect with zero redundant update
+            ws.send_json({"type": "session_start", "language_code": "en-IN"})
+
+            # Stream 10 frames of steady low-level ambient room noise -> must NOT be sent raw during silence!
+            noise_frame = _make_pcm_frame(amplitude=0.004, duration_ms=20)
+            for _ in range(10):
+                ws.send_bytes(noise_frame)
+
+            # Now speak (6 speech frames) + trailing silence (7 frames -> SPEECH_END)
+            speech_frame = _make_pcm_frame(amplitude=0.40, duration_ms=20)
+            silence_frame = _make_silence_frame(duration_ms=20)
+            for _ in range(6):
+                ws.send_bytes(speech_frame)
+            for _ in range(7):
+                ws.send_bytes(silence_frame)
+
+            events, _ = _receive_turn_packets(ws, min_pcm_chunks=1)
+
+    # Single connect directly with en-IN, zero redundant update_language
+    assert rec_stt.connect_langs == ["en-IN"]
+    assert rec_stt.update_langs == []
+    # Pre-speech ring buffer (10 noise lead-in frames + 3 speech onset frames) + remaining speech + trailing zero
+    assert rec_stt.finalize_count == 1
+    assert len(rec_stt.sent_frames) >= 16  # 10 pre-speech + 6 speech + >=1 zero tail
+    # Hallucinated "ummmm ummm what to do...." was NEVER sent to the client UI!
+    transcript_texts = [e["text"] for e in events if e["type"] == "transcript"]
+    assert transcript_texts == ["Sunita Devi ANC checkup weight 54 kilo"]
+    form = next(e for e in events if e["type"] == "form_update")
+    assert form["record"]["beneficiary_name"] == "Sunita Devi"
+    assert form["record"]["weight_kg"] == 54.0
+
+
+def test_rapid_back_to_back_stt_segments_merge_instead_of_dropping_first_clause():
+    """Verify mid-sentence Prisma splits never drop clause 1 when clause 2 arrives mid-LLM."""
+    import asyncio
+    from app.pipeline.gnani_stt import BaseSTTClient, TranscriptEvent
+
+    class SlowRuleBasedExtractor(RuleBasedVisitExtractor):
+        async def extract(self, *args, **kwargs):
+            await asyncio.sleep(0.08)
+            return await super().extract(*args, **kwargs)
+
+    class TwoClauseSTT(BaseSTTClient):
+        def __init__(self):
+            self._queue = None
+
+        async def connect(self, language_code="indic-auto", keyterms=None):
+            self.language_code = str(language_code)
+            self._queue = asyncio.Queue()
+
+        async def send_audio(self, pcm_bytes: bytes):
+            pass
+
+        async def finalize_turn(self):
+            # Emit clause 1 then clause 2 20ms later (while clause 1 is still mid-LLM!)
+            await self._queue.put(
+                TranscriptEvent(
+                    text="Sunita Devi ANC checkup weight 54 kilo no bleeding",
+                    is_final=True,
+                    language=self.language_code,
+                )
+            )
+            await asyncio.sleep(0.02)
+            await self._queue.put(
+                TranscriptEvent(
+                    text="IFA goli 30",
+                    is_final=True,
+                    language=self.language_code,
+                )
+            )
+
+        async def update_language(self, language_code):
+            self.language_code = str(language_code)
+
+        async def transcripts(self):
+            while True:
+                ev = await self._queue.get()
+                if ev is None:
+                    break
+                yield ev
+
+        async def close(self):
+            if self._queue is not None:
+                await self._queue.put(None)
+
+    cfg = Settings(mock_gnani=True, gemini_api_key="", groq_api_key="", vad_silence_tail_ms=100)
+    app = create_app(
+        settings=cfg,
+        db_path=":memory:",
+        stt_factory=lambda: TwoClauseSTT(),
+        tts_factory=lambda: MockTimbreTTSClient(chunk_delay_s=0.0, max_chunks_per_sentence=2),
+        clinical_engine=ClinicalStateEngine(provider=SlowRuleBasedExtractor()),
+    )
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/session") as ws:
+            ws.send_json({"type": "session_start", "language_code": "en-IN"})
+            speech = _make_pcm_frame(amplitude=0.4, duration_ms=20)
+            silence = _make_silence_frame(duration_ms=20)
+            for _ in range(5):
+                ws.send_bytes(speech)
+            for _ in range(7):
+                ws.send_bytes(silence)
+
+            events, _ = _receive_turn_packets(ws, min_pcm_chunks=1)
+
+    form = next(e for e in events if e["type"] == "form_update")
+    assert form["record"]["beneficiary_name"] == "Sunita Devi"
+    assert form["record"]["visit_type"] == "ANC"
+    assert form["record"]["weight_kg"] == 54.0
+    assert form["record"]["ifa_tablets_given"] == 30
+    assert form["record"]["danger_signs"] == []

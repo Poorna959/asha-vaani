@@ -1,9 +1,11 @@
 package com.ashavaani.app.ui.walkmode
 
+import android.os.SystemClock
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.ashavaani.app.AppContainer
+import com.ashavaani.app.audio.AcousticEchoGate
 import com.ashavaani.app.audio.PcmAudioCapturer
 import com.ashavaani.app.audio.PcmAudioPlayer
 import com.ashavaani.app.data.AshaRepository
@@ -43,6 +45,7 @@ class WalkModeViewModel(
 ) : ViewModel() {
 
     private val initialSettings = settingsStore.settings.value
+    private val echoGate = AcousticEchoGate()
 
     private val _uiState = MutableStateFlow(
         WalkModeUiState(
@@ -275,7 +278,17 @@ class WalkModeViewModel(
     private fun startAudioCapture() {
         audioPlayer.ensureStarted()
         val started = audioCapturer.start(
-            onFrame = { frame640 -> voiceClient.sendPcmFrame(frame640) },
+            onFrame = { frame640 ->
+                val suppressEcho = echoGate.shouldSuppressMicFrame(
+                    isAgentSpeaking = audioPlayer.isPlaying.value,
+                    isLoudspeakerActive = audioPlayer.isLoudspeakerActive.value,
+                    lastPlaybackEndedAtMs = audioPlayer.lastPlaybackEndedAtMs,
+                    nowMs = SystemClock.elapsedRealtime(),
+                )
+                if (!suppressEcho) {
+                    voiceClient.sendPcmFrame(frame640)
+                }
+            },
             onError = { err ->
                 _uiState.update { it.copy(errorBanner = "Microphone error: ${err.message}") }
             },

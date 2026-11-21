@@ -131,11 +131,25 @@ class GnaniTimbreTTSClient(BaseTTSClient):
             "X-API-Key-ID": self.api_key,
         }
 
-        ws = await websockets.connect(
-            self.ws_url,
-            additional_headers=headers,
-            max_size=8 * 1024 * 1024,
-        )
+        ws = None
+        last_exc: Optional[Exception] = None
+        for attempt in range(2):
+            try:
+                ws = await websockets.connect(
+                    self.ws_url,
+                    additional_headers=headers,
+                    max_size=8 * 1024 * 1024,
+                    open_timeout=15,
+                )
+                break
+            except (TimeoutError, OSError) as exc:
+                last_exc = exc
+                if attempt == 0:
+                    logger.warning("Timbre v3.0 handshake failed (%s); retrying once...", exc)
+                    await asyncio.sleep(0.15)
+        if ws is None:
+            assert last_exc is not None
+            raise last_exc
         try:
             for sentence in sentences:
                 payload = {

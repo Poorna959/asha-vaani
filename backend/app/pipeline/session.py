@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 import json
 import logging
 import re
@@ -68,12 +69,29 @@ _SPURIOUS_FILLER_TOKENS = frozenset(
 )
 _VALID_SHORT_COMMANDS = frozenset({"no", "ok", "ஆம்", "சரி"})
 _STRIP_PUNCT_RE = re.compile(r"[\s.,!?;:\-–—'\"।…()\[\]{}]+")
+_WORD_SPLIT_RE = re.compile(r"[\s.,!?;:\-–—'\"।…()\[\]{}]+")
+_ELONGATED_REPEAT_RE = re.compile(r"(.)\1{2,}")
+_ELONGATED_HESITATION_RE = re.compile(
+    r"(?:^|\b)(?:u+m{2,}|u{2,}m+|u+h{2,}|h+m{2,}|m{3,}|a+h{2,}|e+h{2,}|o+h{2,})(?:\b|$)",
+    re.IGNORECASE,
+)
+_HESITATION_CORE_TOKENS = frozenset(
+    {"um", "umm", "uh", "uhh", "hm", "hmm", "mm", "ah", "ahh", "eh", "oh", "er", "erm"}
+)
+_PHATIC_SILENCE_HALLUCINATION_WORDS = _HESITATION_CORE_TOKENS | frozenset(
+    {
+        "what", "to", "do", "the", "a", "an", "is", "are", "it", "this", "that",
+        "so", "and", "or", "like", "you", "know", "just", "well", "yeah", "ya",
+        "haan", "han", "haa", "achha", "accha",
+    }
+)
 
 
 def is_spurious_noise_transcript(text: str) -> bool:
-    """Return True for ambient breaths, punctuation-only frames, or single-syllable STT fillers.
+    """Return True for ambient breaths, punctuation-only frames, or STT hesitation hallucinations.
 
-    Prevents background noise from triggering uncommanded LLM turns or ghost-saving drafts (P3-09).
+    Prevents background noise / silence hallucinations (e.g. 'ummmm ummm what to do....', 'ह।')
+    from polluting the live transcript box, triggering uncommanded LLM turns, or ghost-saving drafts.
     """
     if not text:
         return True
@@ -88,6 +106,28 @@ def is_spurious_noise_transcript(text: str) -> bool:
         return True
     if len(cleaned) <= 2:
         return True
+
+    raw_tokens = [tok.lower() for tok in _WORD_SPLIT_RE.split(text.strip()) if tok]
+    if not raw_tokens:
+        return True
+
+    # Collapse elongated filler spellings ("ummmm" -> "umm", "hmmmm" -> "hmm")
+    norm_tokens = [_ELONGATED_REPEAT_RE.sub(r"\1\1", tok) for tok in raw_tokens]
+
+    # Pure hesitation / filler utterances ("ummmm ummm", "uhh hmm", "hmm... hmm...")
+    if all(tok in _SPURIOUS_FILLER_TOKENS or tok in _HESITATION_CORE_TOKENS for tok in norm_tokens):
+        return True
+
+    # Hesitation-led ASR silence hallucinations ("ummmm ummm what to do....") with zero clinical substance
+    hesitation_count = sum(1 for tok in norm_tokens if tok in _HESITATION_CORE_TOKENS)
+    has_elongated_hesitation = any(_ELONGATED_HESITATION_RE.fullmatch(tok) for tok in raw_tokens)
+    if (
+        (has_elongated_hesitation or hesitation_count >= 2)
+        and norm_tokens[0] in _HESITATION_CORE_TOKENS
+        and all(tok in _PHATIC_SILENCE_HALLUCINATION_WORDS for tok in norm_tokens)
+    ):
+        return True
+
     return False
 
 
@@ -143,7 +183,7 @@ class VoiceSessionOrchestrator:
         self.register_draft: Optional[RegisterIntakeDraft] = None
         self._turn_transcripts: list[str] = []
 
-        # Concurrency & barge-in state
+        # Concurrency, VAD audio gating & barge-in state
         self._send_lock = asyncio.Lock()
         self._stt_listener_task: Optional[asyncio.Task[None]] = None
         self._response_task: Optional[asyncio.Task[None]] = None
@@ -151,6 +191,15 @@ class VoiceSessionOrchestrator:
         self._speech_end_ts: Optional[float] = None
         self._last_barge_in_cutoff_ms: Optional[float] = None
         self._closed: bool = False
+        # 300ms pre-speech ring buffer (15 x 20ms frames) so speech onsets are never clipped
+        # while raw ambient room noise during silence is never streamed into Prisma v3.0.
+        self._pre_speech_buffer: deque[bytes] = deque(maxlen=15)
+        self._post_speech_zero_frames_left: int = 0
+        self._idle_frame_counter: int = 0
+        self._speech_seen_since_finalize: bool = False
+        # Tracks final STT segments whose LLM extraction has not yet committed to draft so rapid
+        # mid-sentence Prisma splits ("Sunita Devi 54 kilo" + "IFA goli 30") merge cleanly without loss.
+        self._pending_uncommitted_segments: list[str] = []
 
     # ------------------------------------------------------------------
     # Thread-Safe WebSocket Emitters
@@ -177,7 +226,8 @@ class VoiceSessionOrchestrator:
     async def trigger_barge_in(self) -> bool:
         """Immediately cancel any in-flight LLM/TTS response and flush client audio."""
         cancel_start = time.perf_counter()
-        was_active = self._is_speaking or (
+        was_speaking = self._is_speaking
+        was_active = was_speaking or (
             self._response_task is not None and not self._response_task.done()
         )
         if self._response_task is not None and not self._response_task.done():
@@ -192,6 +242,9 @@ class VoiceSessionOrchestrator:
         self._is_speaking = False
 
         if was_active:
+            if was_speaking:
+                # User interrupted an active spoken response; never carry its text into the next turn.
+                self._pending_uncommitted_segments.clear()
             self.status = "LISTENING"
             self._last_barge_in_cutoff_ms = round((time.perf_counter() - cancel_start) * 1000.0, 2)
             await self._send_json(WsBargeInClearEvent().model_dump())
@@ -281,6 +334,7 @@ class VoiceSessionOrchestrator:
             visit_type=ctx["category"],
         )
         self.readback_completed = False
+        self._pending_uncommitted_segments.clear()
         self.status = "LISTENING"
         await self._send_json(
             WsFormUpdateEvent(
@@ -323,6 +377,7 @@ class VoiceSessionOrchestrator:
         )
         self.readback_completed = False
         self._turn_transcripts.clear()
+        self._pending_uncommitted_segments.clear()
         self.status = "LISTENING"
         await self._send_json(
             WsRegisterIntakeUpdateEvent(
@@ -421,6 +476,7 @@ class VoiceSessionOrchestrator:
         )
         fast_tts_task: Optional[asyncio.Task[None]] = None
         if danger_alerts:
+            self._pending_uncommitted_segments.clear()
             for alert in danger_alerts:
                 if alert.code not in self.draft.danger_signs:
                     self.draft.danger_signs.append(alert.code)
@@ -477,6 +533,7 @@ class VoiceSessionOrchestrator:
                 llm_latency_ms = (time.perf_counter() - llm_start) * 1000.0
 
                 self.register_draft = intake_result.updated_draft
+                self._pending_uncommitted_segments.clear()
                 self.readback_completed = intake_result.readback_completed or bool(danger_alerts)
 
                 compliance = self.compliance_guardrail.enforce(
@@ -616,6 +673,7 @@ class VoiceSessionOrchestrator:
                     turn_result.updated_draft.danger_signs.append(code)
 
             self.draft = turn_result.updated_draft
+            self._pending_uncommitted_segments.clear()
             self.readback_completed = turn_result.readback_completed or bool(danger_alerts)
 
             # 3. FR-6 Pre-TTS Compliance Firewall (Zero Diagnosis / Zero Medicine Advice)
@@ -715,6 +773,9 @@ class VoiceSessionOrchestrator:
         """Consume partial and final STT transcripts concurrently."""
         try:
             async for event in self.stt.transcripts():
+                if is_spurious_noise_transcript(event.text):
+                    logger.debug("Suppressing spurious STT noise before UI emit: %r", event.text)
+                    continue
                 await self._send_json(
                     WsTranscriptEvent(
                         text=event.text,
@@ -724,11 +785,17 @@ class VoiceSessionOrchestrator:
                     ).model_dump()
                 )
                 if event.is_final:
-                    # Cancel any prior response still playing before starting the new turn
+                    # Merge with any prior uncommitted final segment still mid-LLM so rapid
+                    # mid-sentence Prisma splits never drop the first clause of what the ASHA spoke.
+                    self._pending_uncommitted_segments.append(event.text)
+                    merged_text = " ".join(self._pending_uncommitted_segments).strip()
+                    merged_event = event.model_copy(update={"text": merged_text})
+
+                    # Cancel any prior response still extracting or speaking before running merged turn
                     if self._response_task is not None and not self._response_task.done():
                         await self.trigger_barge_in()
                     self._response_task = asyncio.create_task(
-                        self._respond_to_final_transcript(event)
+                        self._respond_to_final_transcript(merged_event)
                     )
         except asyncio.CancelledError:
             raise
@@ -745,15 +812,51 @@ class VoiceSessionOrchestrator:
 
     async def _handle_pcm_frame(self, pcm_bytes: bytes) -> None:
         vad_event = self.vad.process_pcm(pcm_bytes)
-        if vad_event == VadEvent.SPEECH_START:
-            # Instant barge-in cancellation if agent is currently reading back!
-            await self.trigger_barge_in()
+        is_mock_stt = isinstance(self.stt, MockPrismaSTTClient)
 
-        await self.stt.send_audio(pcm_bytes)
+        if vad_event == VadEvent.SPEECH_START:
+            # Instant barge-in cancellation when agent is actively speaking TTS read-back.
+            # Do NOT kill a silent in-flight LLM extraction on SPEECH_START (wait for real final text merge).
+            if self._is_speaking:
+                await self.trigger_barge_in()
+            self._post_speech_zero_frames_left = 0
+            self._idle_frame_counter = 0
+            self._speech_seen_since_finalize = True
+            # Replay 300ms pre-speech ring buffer so opening syllables are never clipped
+            while self._pre_speech_buffer:
+                await self.stt.send_audio(self._pre_speech_buffer.popleft())
+            await self.stt.send_audio(pcm_bytes)
+            return
+
+        if vad_event == VadEvent.SPEECH_CONTINUE:
+            self._speech_seen_since_finalize = True
+            await self.stt.send_audio(pcm_bytes)
+            return
 
         if vad_event == VadEvent.SPEECH_END:
             self._speech_end_ts = time.perf_counter()
+            self._speech_seen_since_finalize = False
+            self._post_speech_zero_frames_left = 45  # ~900ms clean digital silence tail
+            self._idle_frame_counter = 0
+            if not is_mock_stt:
+                await self.stt.send_audio(b"\x00" * len(pcm_bytes))
             await self.stt.finalize_turn()
+            return
+
+        # VadEvent.SILENCE: capture into pre-speech ring buffer, but NEVER stream noisy
+        # room hum / street ambiance into live Prisma v3.0 (prevents phantom speech_start
+        # stalls and 'ummmm...' ASR silence hallucinations).
+        self._pre_speech_buffer.append(pcm_bytes)
+        if not is_mock_stt:
+            if self._post_speech_zero_frames_left > 0:
+                self._post_speech_zero_frames_left -= 1
+                await self.stt.send_audio(b"\x00" * len(pcm_bytes))
+            else:
+                self._idle_frame_counter += 1
+                if self._idle_frame_counter >= 50:
+                    # Lightweight 1Hz digital-zero keepalive keeps upstream socket warm
+                    self._idle_frame_counter = 0
+                    await self.stt.send_audio(b"\x00" * len(pcm_bytes))
 
     async def _handle_control_message(self, raw_text: str) -> None:
         try:
@@ -770,7 +873,8 @@ class VoiceSessionOrchestrator:
             lang = msg.get("language_code")
             if lang:
                 self.language_code = lang
-                await self.stt.update_language(lang)
+                if str(lang) != getattr(self.stt, "language_code", None):
+                    await self.stt.update_language(lang)
             register_id = msg.get("register_id")
             patient_id = msg.get("patient_id")
             if register_id:
@@ -803,14 +907,24 @@ class VoiceSessionOrchestrator:
             return
 
         if msg_type == "finalize_turn":
-            self._speech_end_ts = time.perf_counter()
-            await self.stt.finalize_turn()
+            if isinstance(self.stt, MockPrismaSTTClient):
+                self._speech_end_ts = time.perf_counter()
+                await self.stt.finalize_turn()
+                return
+            had_speech = self._speech_seen_since_finalize or self.vad._in_speech
+            self.vad.reset()
+            self._pre_speech_buffer.clear()
+            self._speech_seen_since_finalize = False
+            if had_speech:
+                self._speech_end_ts = time.perf_counter()
+                await self.stt.finalize_turn()
             return
 
         if msg_type == "reset_draft":
             await self.trigger_barge_in()
             self.readback_completed = False
             self._turn_transcripts.clear()
+            self._pending_uncommitted_segments.clear()
             self.status = "LISTENING"
             if msg.get("mode") == "visit" or self.active_register is None:
                 self.active_register = None
@@ -878,6 +992,31 @@ class VoiceSessionOrchestrator:
     async def run(self) -> None:
         """Accept WebSocket, open Prisma STT stream, and process full-duplex frames."""
         await self.ws.accept()
+
+        # Peek briefly (up to 80ms) for an immediate client `session_start` so upstream
+        # Prisma v3.0 opens ONCE directly with the user's locked language_code instead of
+        # connecting as `indic-auto` and immediately reconfiguring/reconnecting.
+        first_packet: Optional[dict[str, Any]] = None
+        try:
+            first_packet = await asyncio.wait_for(self.ws.receive(), timeout=0.08)
+        except asyncio.TimeoutError:
+            first_packet = None
+        except WebSocketDisconnect:
+            await self.close()
+            return
+
+        if first_packet is not None and first_packet.get("type") == "websocket.disconnect":
+            await self.close()
+            return
+
+        if first_packet is not None and first_packet.get("text") is not None:
+            try:
+                first_msg = json.loads(first_packet["text"])
+                if first_msg.get("type") == "session_start" and first_msg.get("language_code"):
+                    self.language_code = str(first_msg["language_code"])
+            except Exception:
+                pass
+
         await self.stt.connect(
             language_code=self.language_code,
             keyterms=list(ASHA_CLINICAL_KEYTERMS),
@@ -885,6 +1024,12 @@ class VoiceSessionOrchestrator:
         self._stt_listener_task = asyncio.create_task(self._stt_listener_loop())
 
         try:
+            if first_packet is not None:
+                if first_packet.get("bytes") is not None:
+                    await self._handle_pcm_frame(first_packet["bytes"])
+                elif first_packet.get("text") is not None:
+                    await self._handle_control_message(first_packet["text"])
+
             while True:
                 packet = await self.ws.receive()
                 if packet.get("type") == "websocket.disconnect":

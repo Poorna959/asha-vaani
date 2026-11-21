@@ -8,6 +8,7 @@ import android.media.AudioManager
 import android.media.AudioTrack
 import android.os.Build
 import android.os.Process
+import android.os.SystemClock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -70,6 +71,11 @@ class PcmAudioPlayer(
 
     private val _lastBargeInFlushMs = MutableStateFlow<Float?>(null)
     val lastBargeInFlushMs: StateFlow<Float?> = _lastBargeInFlushMs.asStateFlow()
+
+    /** Monotonic timestamp (`SystemClock.elapsedRealtime()`) when natural TTS playback ended; 0L after explicit barge-in flush. */
+    @Volatile
+    var lastPlaybackEndedAtMs: Long = 0L
+        private set
 
     private val trackLock = Any()
     private var audioTrack: AudioTrack? = null
@@ -237,6 +243,8 @@ class PcmAudioPlayer(
         }
 
         _isPlaying.value = false
+        // Explicit user barge-in: clear echo holdoff so the ASHA worker's speech captures immediately.
+        lastPlaybackEndedAtMs = 0L
         val elapsedMs = (System.nanoTime() - startNs) / 1_000_000f
         _lastBargeInFlushMs.value = elapsedMs
         return elapsedMs
@@ -295,6 +303,7 @@ class PcmAudioPlayer(
             delay(IDLE_TAIL_MS)
             if (queueController.size() == 0) {
                 _isPlaying.value = false
+                lastPlaybackEndedAtMs = SystemClock.elapsedRealtime()
             }
         }
     }
