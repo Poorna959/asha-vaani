@@ -56,11 +56,36 @@ uv run pytest -v
 
 ---
 
+## Quick Start (Native Android App — Phase P2)
+
+Built with **Kotlin 2.0 + Jetpack Compose Material 3** (`compileSdk = 34`, `minSdk = 26`, JDK 21), hardware `AcousticEchoCanceler` + `NoiseSuppressor` + `AutomaticGainControl`, full-duplex OkHttp `/ws/session` PCM streaming, and local-first Room DB caching.
+
+### 1. Build Debug APK & Run Android Unit Tests
+Make sure `android/local.properties` points to your Android SDK (`sdk.dir=/home/poornachandra-s/Android/Sdk`) and run with **JDK 21**:
+```bash
+cd android
+JAVA_HOME=/home/poornachandra-s/.jdks/temurin-21 ./gradlew :app:assembleDebug :app:testDebugUnitTest
+```
+Output APK: `android/app/build/outputs/apk/debug/app-debug.apk`
+
+### 2. Deploy to Physical Android Phone (USB `adb reverse`)
+1. Enable **USB Debugging** on the Android phone and connect via USB.
+2. Start the FastAPI backend on your laptop (`uv run uvicorn app.main:app --host 0.0.0.0 --port 8000`).
+3. Forward port `8000` over USB and install the APK:
+   ```bash
+   adb devices
+   adb reverse tcp:8000 tcp:8000
+   adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+   ```
+4. Launch **ASHA Vaani** on the phone — it defaults to `http://127.0.0.1:8000` (editable anytime by tapping the top-right **TTFA / Status pill** for LAN Wi-Fi demos).
+
+---
+
 ## Key API Endpoints
 
 | Method & Path | Purpose |
 | :--- | :--- |
-| `WS /ws/session` | Full-duplex 16kHz PCM audio + JSON state stream (`transcript`, `form_update`, `danger_escalation`, `barge_in_clear`, `visit_saved`, `metrics`) |
+| `WS /ws/session` | Full-duplex 16kHz PCM audio + JSON state stream (`transcript`, `form_update`, `register_intake_update`, `danger_escalation`, `barge_in_clear`, `visit_saved`, `patient_saved`, `metrics`) |
 | `GET /health` | Server health, active Gnani mode (`mock`/`live`), models, danger-sign count |
 | `POST /api/registers` | Create a custom register with dynamic fields |
 | `GET /api/registers/{id}/patients?q=` | List or search patients by name inside a register |
@@ -75,6 +100,8 @@ uv run pytest -v
 
 ## Documentation
 - [PS1 Project Rules (AGENTS.md)](AGENTS.md)
-- [Phase P1 PRD](docs/PRD_Phase_P1.md)
+- [Phase P1 PRD (Backend Orchestrator)](docs/PRD_Phase_P1.md)
+- [Phase P2 PRD (Native Android Client)](docs/PRD_Phase_P2.md)
+- [Phase P2 Material 3 UI/UX Design Spec](docs/UI_UX_Design_Phase_P2.md)
 - [Canonical 12-Item NHM Danger-Sign List](docs/danger_signs.json)
 - [Gnani Prisma v3.0 & Timbre v3.0 Protocol Reference](docs/gnani_protocol.md)

@@ -5,10 +5,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -47,9 +45,10 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.ashavaani.app.AppContainer
 import com.ashavaani.app.model.ConnectionState
-import com.ashavaani.app.ui.components.StatusPill
-import com.ashavaani.app.ui.components.SunlitCard
 import com.ashavaani.app.ui.components.TelemetryStatusPill
+import com.ashavaani.app.ui.history.FollowUpScreen
+import com.ashavaani.app.ui.history.HistoryViewModel
+import com.ashavaani.app.ui.history.VisitsScreen
 import com.ashavaani.app.ui.registers.PatientProfileScreen
 import com.ashavaani.app.ui.registers.RegisterDetailScreen
 import com.ashavaani.app.ui.registers.RegistersScreen
@@ -61,9 +60,11 @@ import com.ashavaani.app.ui.walkmode.WalkModeScreen
 import com.ashavaani.app.ui.walkmode.WalkModeViewModel
 
 /**
- * Root 4-tab application shell matching `docs/UI_UX_Design_Phase_P2.md`.
- * Wires Walk Mode (P2-04) and Custom Registers FR-7.1–FR-7.6 (P2-05),
- * with Follow-Ups and Visits plugging in during P2-06.
+ * Complete 4-tab ASHA Vaani application shell wiring:
+ * - Tab 1: Walk Mode (Home) + Urgent PHC Referral Modal Sheet + Settings/Telemetry HUD
+ * - Tab 2: Custom Registers (List -> Detail + Search + Export -> Field:Answer Profile)
+ * - Tab 3: Follow-Up Queue (PHC Urgent pinned + 1-tap Mark Done / Start Visit)
+ * - Tab 4: Saved Visits History (All / PHC Escalated Only)
  */
 @Composable
 fun AshaVaaniAppShell(
@@ -74,6 +75,9 @@ fun AshaVaaniAppShell(
     )
     val registersViewModel: RegistersViewModel = viewModel(
         factory = RegistersViewModel.factory(container),
+    )
+    val historyViewModel: HistoryViewModel = viewModel(
+        factory = HistoryViewModel.factory(container),
     )
 
     val walkUiState by walkModeViewModel.uiState.collectAsStateWithLifecycle()
@@ -87,6 +91,13 @@ fun AshaVaaniAppShell(
     val registerBusy by registersViewModel.isBusy.collectAsStateWithLifecycle()
     val registerToast by registersViewModel.statusToast.collectAsStateWithLifecycle()
     val registerError by registersViewModel.errorBanner.collectAsStateWithLifecycle()
+
+    val followUps by historyViewModel.filteredFollowUps.collectAsStateWithLifecycle()
+    val followUpFilter by historyViewModel.followUpFilter.collectAsStateWithLifecycle()
+    val visits by historyViewModel.filteredVisits.collectAsStateWithLifecycle()
+    val visitFilter by historyViewModel.visitFilter.collectAsStateWithLifecycle()
+    val historyToast by historyViewModel.statusToast.collectAsStateWithLifecycle()
+    val historyError by historyViewModel.errorBanner.collectAsStateWithLifecycle()
 
     var showSettingsSheet by remember { mutableStateOf(false) }
 
@@ -272,18 +283,29 @@ fun AshaVaaniAppShell(
             }
 
             composable(AshaTab.FOLLOW_UPS.route) {
-                TabScaffoldPlaceholder(
-                    tag = "P2-06 · FOLLOW-UP QUEUE",
-                    title = "Village Follow-Up Queue",
-                    description = "Automatically populated when visits are confirmed or flagged for urgent PHC referral. Supports 1-tap Mark Done and Start Visit.",
+                FollowUpScreen(
+                    followUps = followUps,
+                    activeFilter = followUpFilter,
+                    statusToast = historyToast,
+                    errorBanner = historyError,
+                    onSelectFilter = historyViewModel::setFollowUpFilter,
+                    onRefresh = historyViewModel::refreshAll,
+                    onMarkComplete = historyViewModel::markFollowUpCompleted,
+                    onStartVisit = { beneficiaryId ->
+                        walkModeViewModel.startPatientFollowUp(beneficiaryId)
+                        navigateToWalkMode()
+                    },
+                    onClearToast = historyViewModel::clearToast,
+                    onClearError = historyViewModel::clearError,
                 )
             }
 
             composable(AshaTab.VISITS.route) {
-                TabScaffoldPlaceholder(
-                    tag = "P2-06 · SAVED VISITS",
-                    title = "Saved Home Visits History",
-                    description = "Local-first Room cache of confirmed ANC, Newborn HBNC, and Immunisation visits with All and PHC Escalated filters.",
+                VisitsScreen(
+                    visits = visits,
+                    activeFilter = visitFilter,
+                    onSelectFilter = historyViewModel::setVisitFilter,
+                    onRefresh = historyViewModel::refreshAll,
                 )
             }
         }
@@ -431,38 +453,6 @@ private fun AshaBottomNavBar(
                     ),
                 )
             }
-        }
-    }
-}
-
-@Composable
-private fun TabScaffoldPlaceholder(
-    tag: String,
-    title: String,
-    description: String,
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        SunlitCard(modifier = Modifier.fillMaxWidth()) {
-            StatusPill(
-                text = tag,
-                containerColor = AshaColors.ClinicalTealTint,
-                contentColor = AshaColors.ClinicalTeal,
-            )
-            Spacer(modifier = Modifier.height(10.dp))
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleLarge,
-            )
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = description,
-                style = MaterialTheme.typography.bodyMedium,
-            )
         }
     }
 }
