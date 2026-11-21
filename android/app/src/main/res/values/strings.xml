@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ASHA Vaani</string>
+    <string name="nav_walk_mode">Walk Mode</string>
+    <string name="nav_registers">Registers</string>
+    <string name="nav_follow_ups">Follow-Ups</string>
+    <string name="nav_visits">Visits</string>
+</resources>
