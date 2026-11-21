@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ASHA Vaani — PHC Supervisor Escalation Console</title>
+  <style>
+    :root {
+      --teal: #0F766E;
+      --teal-dark: #115E59;
+      --teal-soft: #CCFBF1;
+      --bg: #F8FAFC;
+      --card: #FFFFFF;
+      --border: #CBD5E1;
+      --border-soft: #E2E8F0;
+      --text: #0F172A;
+      --muted: #475569;
+      --crimson: #DC2626;
+      --crimson-dark: #991B1B;
+      --crimson-soft: #FEE2E2;
+      --amber: #D97706;
+      --amber-soft: #FEF3C7;
+      --emerald: #059669;
+      --emerald-soft: #D1FAE5;
+      --radius: 14px;
+      --shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      background: linear-gradient(135deg, var(--teal) 0%, var(--teal-dark) 100%);
+      color: #FFFFFF;
+      padding: 18px 28px;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      box-shadow: 0 4px 14px rgba(15, 118, 110, 0.22);
+    }
+    .brand { display: flex; align-items: center; gap: 14px; }
+    .brand-icon {
+      width: 44px; height: 44px; border-radius: 12px;
+      background: rgba(255,255,255,0.16);
+      display: grid; place-items: center;
+      font-size: 22px; font-weight: 800;
+      border: 1px solid rgba(255,255,255,0.28);
+    }
+    .brand h1 { font-size: 20px; font-weight: 700; letter-spacing: -0.01em; }
+    .brand p { font-size: 13px; opacity: 0.9; }
+
+    .header-pills { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+    .pill {
+      display: inline-flex; align-items: center; gap: 7px;
+      padding: 6px 12px; border-radius: 999px;
+      font-size: 12px; font-weight: 600;
+      background: rgba(255,255,255,0.16);
+      border: 1px solid rgba(255,255,255,0.24);
+      color: #FFFFFF;
+    }
+    .dot {
+      width: 9px; height: 9px; border-radius: 50%;
+      background: #34D399;
+      box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.7);
+      animation: pulse 1.8s infinite;
+    }
+    .dot.offline { background: #FBBF24; animation: none; }
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.7); }
+      70% { box-shadow: 0 0 0 8px rgba(52, 211, 153, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); }
+    }
+
+    .sound-btn {
+      cursor: pointer; background: rgba(255,255,255,0.2);
+      border: 1px solid rgba(255,255,255,0.35); color: #fff;
+      padding: 6px 12px; border-radius: 999px; font-size: 12px; font-weight: 600;
+    }
+    .sound-btn:hover { background: rgba(255,255,255,0.3); }
+
+    main {
+      max-width: 1320px; width: 100%; margin: 24px auto; padding: 0 24px 32px;
+      flex: 1; display: flex; flex-direction: column; gap: 22px;
+    }
+
+    /* Live Urgent Escalation Banner */
+    #live-alert-banner {
+      display: none;
+      background: var(--crimson);
+      color: #FFFFFF;
+      border-radius: var(--radius);
+      padding: 20px 24px;
+      box-shadow: 0 10px 26px rgba(220, 38, 38, 0.35);
+      border: 2px solid #FCA5A5;
+      animation: flashIn 0.45s ease-out;
+    }
+    #live-alert-banner.visible { display: block; }
+    @keyframes flashIn {
+      0% { transform: translateY(-10px) scale(0.99); opacity: 0.2; }
+      100% { transform: translateY(0) scale(1); opacity: 1; }
+    }
+    .alert-top {
+      display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+      gap: 12px; margin-bottom: 10px;
+    }
+    .alert-tag {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: rgba(255,255,255,0.2); padding: 4px 12px;
+      border-radius: 999px; font-size: 12px; font-weight: 800; letter-spacing: 0.04em;
+    }
+    .alert-title { font-size: 20px; font-weight: 800; margin-bottom: 6px; }
+    .alert-meta { font-size: 14px; opacity: 0.95; margin-bottom: 8px; }
+    .alert-instruction {
+      background: rgba(153, 27, 27, 0.45);
+      border-left: 4px solid #FECACA;
+      padding: 10px 14px; border-radius: 8px; font-size: 14px; font-weight: 600;
+    }
+
+    /* KPI Strip */
+    .kpi-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px;
+    }
+    .kpi-card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 18px 20px; box-shadow: var(--shadow);
+    }
+    .kpi-card.danger-active {
+      border-color: var(--crimson); background: #FFF5F5;
+    }
+    .kpi-label {
+      font-size: 12px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.05em; color: var(--muted); margin-bottom: 6px;
+    }
+    .kpi-value { font-size: 32px; font-weight: 800; color: var(--text); }
+    .kpi-card.danger-active .kpi-value { color: var(--crimson); }
+    .kpi-sub { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+    /* Section Cards */
+    .card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden;
+    }
+    .card-header {
+      padding: 16px 20px; border-bottom: 1px solid var(--border-soft);
+      display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px;
+    }
+    .card-header h2 { font-size: 16px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+    .card-body { padding: 16px 20px; }
+
+    .split-grid {
+      display: grid; grid-template-columns: 1.35fr 1fr; gap: 20px;
+    }
+    @media (max-width: 960px) { .split-grid { grid-template-columns: 1fr; } }
+
+    /* Escalation List */
+    .esc-list { display: flex; flex-direction: column; gap: 12px; }
+    .esc-item {
+      border: 1px solid #FECACA; background: #FFFBFB;
+      border-left: 5px solid var(--crimson);
+      border-radius: 12px; padding: 14px 16px;
+      display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px;
+    }
+    .esc-item.acked {
+      border-color: #A7F3D0; border-left-color: var(--emerald); background: #F0FDF4;
+    }
+    .esc-info { flex: 1; min-width: 240px; }
+    .esc-name { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
+    .esc-codes { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+    .badge {
+      display: inline-block; padding: 3px 9px; border-radius: 999px;
+      font-size: 11px; font-weight: 700;
+    }
+    .badge-red { background: var(--crimson-soft); color: var(--crimson-dark); }
+    .badge-green { background: var(--emerald-soft); color: #065F46; }
+    .badge-teal { background: var(--teal-soft); color: var(--teal-dark); }
+    .badge-amber { background: var(--amber-soft); color: #92400E; }
+
+    .ack-btn {
+      cursor: pointer; border: none; border-radius: 10px;
+      padding: 10px 16px; font-size: 13px; font-weight: 700;
+      background: var(--crimson); color: #FFFFFF;
+      transition: background 0.15s ease;
+    }
+    .ack-btn:hover { background: var(--crimson-dark); }
+    .ack-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+    /* Tables */
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th {
+      text-align: left; padding: 10px 12px; font-size: 11px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted);
+      border-bottom: 1px solid var(--border-soft); background: #F8FAFC;
+    }
+    td { padding: 11px 12px; border-bottom: 1px solid var(--border-soft); vertical-align: top; }
+    tr:last-child td { border-bottom: none; }
+
+    .filter-row { display: flex; gap: 8px; }
+    .filter-btn {
+      cursor: pointer; border: 1px solid var(--border); background: #FFF;
+      padding: 5px 12px; border-radius: 999px; font-size: 12px; font-weight: 600; color: var(--muted);
+    }
+    .filter-btn.active { background: var(--teal); border-color: var(--teal); color: #FFF; }
+
+    .empty-state {
+      text-align: center; padding: 26px 12px; color: var(--muted); font-size: 14px;
+    }
+
+    footer {
+      background: #0F172A; color: #E2E8F0;
+      padding: 14px 28px; font-size: 12px;
+      display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px;
+    }
+    .compliance-pill {
+      background: rgba(204, 251, 241, 0.15); border: 1px solid rgba(94, 234, 212, 0.35);
+      color: #99F6E4; padding: 4px 10px; border-radius: 999px; font-weight: 700;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <div class="brand-icon">AV</div>
+      <div>
+        <h1>ASHA Vaani — PHC Supervisor Escalation Console</h1>
+        <p>Real-Time Maternal &amp; Newborn Field Referral Monitor · Gnani Voice Hackathon PS1</p>
+      </div>
+    </div>
+    <div class="header-pills">
+      <span class="pill" id="sse-pill"><span class="dot" id="sse-dot"></span><span id="sse-label">Connecting...</span></span>
+      <span class="pill" id="engine-pill">Prisma v3.0 · Timbre v3.0</span>
+      <button class="sound-btn" id="sound-toggle" type="button">Alert Chime: ON</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- Live Urgent Escalation Banner -->
+    <section id="live-alert-banner" role="alert" aria-live="assertive">
+      <div class="alert-top">
+        <span class="alert-tag" id="banner-priority">LIVE FIELD DANGER ESCALATION</span>
+        <span id="banner-time" style="font-size:12px;font-weight:700;"></span>
+      </div>
+      <div class="alert-title" id="banner-title">Danger Sign Flagged</div>
+      <div class="alert-meta" id="banner-meta"></div>
+      <div class="alert-instruction" id="banner-instruction"></div>
+    </section>
+
+    <!-- KPI Strip -->
+    <section class="kpi-grid">
+      <div class="kpi-card" id="kpi-esc-card">
+        <div class="kpi-label">Active PHC Escalations</div>
+        <div class="kpi-value" id="kpi-active-esc">0</div>
+        <div class="kpi-sub" id="kpi-acked-sub">0 acknowledged by PHC</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Total Home Visits Logged</div>
+        <div class="kpi-value" id="kpi-visits">0</div>
+        <div class="kpi-sub">Voice-confirmed &amp; persisted</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Pending Village Follow-Ups</div>
+        <div class="kpi-value" id="kpi-followups">0</div>
+        <div class="kpi-sub">Auto-scheduled from visits</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Custom Registers &amp; Patients</div>
+        <div class="kpi-value" id="kpi-patients">0</div>
+        <div class="kpi-sub" id="kpi-registers-sub">0 custom registers</div>
+      </div>
+    </section>
+
+    <!-- Escalated PHC Referrals Queue -->
+    <section class="card">
+      <div class="card-header">
+        <h2>Urgent PHC Referrals &amp; Live Danger Alerts</h2>
+        <span class="badge badge-red" id="esc-count-badge">0 Open</span>
+      </div>
+      <div class="card-body">
+        <div class="esc-list" id="escalations-list">
+          <div class="empty-state">No danger-sign escalations yet. Live alerts from ASHA workers will flash here immediately.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Visits & Follow-Ups Split View -->
+    <section class="split-grid">
+      <div class="card">
+        <div class="card-header">
+          <h2>Recent Field Visits</h2>
+          <div class="filter-row">
+            <button class="filter-btn active" id="filter-all" type="button">All Visits</button>
+            <button class="filter-btn" id="filter-danger" type="button">PHC Escalated</button>
+          </div>
+        </div>
+        <div style="overflow-x:auto;">
+          <table>
+            <thead>
+              <tr>
+                <th>Beneficiary</th>
+                <th>Type</th>
+                <th>Clinical Summary</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="visits-tbody">
+              <tr><td colspan="4" class="empty-state">Loading visits...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <h2>Village Follow-Up Queue</h2>
+          <span class="badge badge-teal" id="fup-badge">0 Pending</span>
+        </div>
+        <div style="overflow-x:auto;">
+          <table>
+            <thead>
+              <tr>
+                <th>Beneficiary</th>
+                <th>Due Date</th>
+                <th>Purpose</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="followups-tbody">
+              <tr><td colspan="4" class="empty-state">Loading follow-ups...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <span><strong>ASHA Vaani PHC Console</strong> — Real-time WebSocket/SSE field-to-PHC escalation bridge</span>
+    <span class="compliance-pill">Canonical NHM Danger-Sign List Only · Zero Diagnosis or Treatment Advice</span>
+  </footer>
+
+  <script>
+    let state = { visits: [], follow_ups: [], recent_live_alerts: [], kpis: {}, system: {} };
+    let visitFilter = "all";
+    let soundEnabled = true;
+
+    function esc(value) {
+      return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+
+    function fmtTime(iso) {
+      if (!iso) return "";
+      const d = new Date(iso);
+      return Number.isNaN(d.getTime()) ? iso : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    }
+
+    function playChime() {
+      if (!soundEnabled) return;
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const now = ctx.currentTime;
+        [880, 1174].forEach((freq, i) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = "sine";
+          osc.frequency.value = freq;
+          gain.gain.setValueAtTime(0.12, now + i * 0.14);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.14 + 0.16);
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start(now + i * 0.14);
+          osc.stop(now + i * 0.14 + 0.18);
+        });
+      } catch (_) {}
+    }
+
+    function showLiveBanner(alertEnvelope) {
+      const data = alertEnvelope.data || alertEnvelope;
+      const banner = document.getElementById("live-alert-banner");
+      document.getElementById("banner-priority").textContent =
+        `URGENT PHC REFERRAL · ${data.priority || "IMMEDIATE_EMERGENCY"} · ${data.code || ""}`;
+      document.getElementById("banner-time").textContent = fmtTime(alertEnvelope.timestamp || new Date().toISOString());
+      document.getElementById("banner-title").textContent =
+        `${data.beneficiary_name || "Live Field Alert"} — ${data.name || data.code}`;
+      document.getElementById("banner-meta").textContent =
+        `ID: ${data.beneficiary_id || "LIVE"} · Type: ${data.visit_type || "ANC"} · Lang: ${data.language_code || "auto"} · Transcript: "${data.transcript || ""}"`;
+      document.getElementById("banner-instruction").textContent =
+        data.localized_instruction || "Danger sign detected. Refer to PHC immediately.";
+      banner.classList.remove("visible");
+      void banner.offsetWidth;
+      banner.classList.add("visible");
+    }
+
+    async function acknowledgeVisit(visitId, btnEl) {
+      if (btnEl) { btnEl.disabled = true; btnEl.textContent = "Acknowledging..."; }
+      try {
+        const res = await fetch(`/api/visits/${encodeURIComponent(visitId)}/acknowledge`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ acknowledged_by: "PHC Medical Officer" }),
+        });
+        if (!res.ok) throw new Error("Failed to acknowledge");
+        await refreshSummary();
+      } catch (err) {
+        if (btnEl) { btnEl.disabled = false; btnEl.textContent = "Acknowledge PHC Referral"; }
+        console.error(err);
+      }
+    }
+
+    function render() {
+      const k = state.kpis || {};
+      const sys = state.system || {};
+
+      document.getElementById("engine-pill").textContent =
+        `${sys.stt_model || "prisma-v3.0"} · ${sys.tts_model || "timbre-v3.0"} · ${sys.llm_mode || "offline"} (${sys.llm_model || ""})`;
+
+      const activeEsc = k.active_escalations || 0;
+      document.getElementById("kpi-active-esc").textContent = activeEsc;
+      document.getElementById("kpi-acked-sub").textContent = `${k.acknowledged_escalations || 0} acknowledged by PHC`;
+      document.getElementById("kpi-esc-card").classList.toggle("danger-active", activeEsc > 0);
+      document.getElementById("kpi-visits").textContent = k.total_visits || 0;
+      document.getElementById("kpi-followups").textContent = k.pending_follow_ups || 0;
+      document.getElementById("kpi-patients").textContent = k.total_patients || 0;
+      document.getElementById("kpi-registers-sub").textContent = `${k.custom_registers || 0} custom registers`;
+      document.getElementById("esc-count-badge").textContent = `${activeEsc} Open`;
+      document.getElementById("fup-badge").textContent = `${k.pending_follow_ups || 0} Pending`;
+
+      // Render Escalations (persisted danger visits + unconfirmed live alerts)
+      const escContainer = document.getElementById("escalations-list");
+      const dangerVisits = (state.visits || []).filter(v => v.has_danger_sign);
+      const liveAlerts = state.recent_live_alerts || [];
+
+      if (dangerVisits.length === 0 && liveAlerts.length === 0) {
+        escContainer.innerHTML = `<div class="empty-state">No danger-sign escalations yet. Live alerts from ASHA workers will flash here immediately.</div>`;
+      } else {
+        const visitCards = dangerVisits.map(v => {
+          const acked = Boolean(v.phc_acknowledged);
+          const badges = (v.danger_signs || []).map(c => `<span class="badge badge-red">${esc(c)}</span>`).join("");
+          return `
+            <div class="esc-item ${acked ? "acked" : ""}">
+              <div class="esc-info">
+                <div class="esc-name">
+                  ${esc(v.beneficiary_name)} <span style="font-weight:500;color:#475569;font-size:13px;">(${esc(v.beneficiary_id)} · ${esc(v.visit_type)})</span>
+                </div>
+                <div class="esc-codes">${badges}</div>
+                <div style="font-size:12px;color:#475569;">
+                  Logged ${esc(fmtTime(v.created_at))} · Lang: ${esc(v.language_code)}
+                  ${v.raw_transcript ? ` · <em>"${esc(v.raw_transcript.slice(0, 140))}"</em>` : ""}
+                </div>
+              </div>
+              <div>
+                ${
+                  acked
+                    ? `<span class="badge badge-green">ACKNOWLEDGED_BY_PHC · ${esc(fmtTime(v.phc_acknowledged_at))}</span>`
+                    : `<button class="ack-btn" type="button" onclick="acknowledgeVisit('${esc(v.id)}', this)">Acknowledge PHC Referral</button>`
+                }
+              </div>
+            </div>`;
+        }).join("");
+
+        const liveCards = liveAlerts.slice(0, 5).map(env => {
+          const a = env.data || {};
+          return `
+            <div class="esc-item">
+              <div class="esc-info">
+                <div class="esc-name">
+                  ${esc(a.beneficiary_name || "Live Field Alert")} <span class="badge badge-amber">LIVE UNCONFIRMED</span>
+                </div>
+                <div class="esc-codes">
+                  <span class="badge badge-red">${esc(a.code)} · ${esc(a.name)}</span>
+                </div>
+                <div style="font-size:12px;color:#475569;">
+                  ${esc(fmtTime(env.timestamp))} · ${esc(a.localized_instruction || "")}
+                </div>
+              </div>
+              <span class="badge badge-red">${esc(a.priority || "IMMEDIATE_EMERGENCY")}</span>
+            </div>`;
+        }).join("");
+
+        escContainer.innerHTML = liveCards + visitCards;
+      }
+
+      // Render Visits Table
+      const filteredVisits = visitFilter === "danger"
+        ? (state.visits || []).filter(v => v.has_danger_sign)
+        : (state.visits || []);
+      const vBody = document.getElementById("visits-tbody");
+      if (filteredVisits.length === 0) {
+        vBody.innerHTML = `<tr><td colspan="4" class="empty-state">No visits matching this filter yet.</td></tr>`;
+      } else {
+        vBody.innerHTML = filteredVisits.map(v => {
+          const details = [];
+          if (v.weight_kg != null) details.push(`Weight: ${v.weight_kg} kg`);
+          if (v.ifa_tablets_given != null) details.push(`IFA: ${v.ifa_tablets_given}`);
+          if (v.vaccinations_due && v.vaccinations_due.length) details.push(`Due: ${v.vaccinations_due.join(", ")}`);
+          if (v.next_visit_date) details.push(`Next: ${v.next_visit_date}`);
+          const statusBadge = v.has_danger_sign
+            ? (v.phc_acknowledged
+                ? `<span class="badge badge-green">PHC ACKED</span>`
+                : `<span class="badge badge-red">ESCALATED</span>`)
+            : `<span class="badge badge-teal">SAVED</span>`;
+          return `
+            <tr>
+              <td><strong>${esc(v.beneficiary_name)}</strong><br/><span style="color:#64748B;font-size:11px;">${esc(v.beneficiary_id)}</span></td>
+              <td><span class="badge badge-teal">${esc(v.visit_type)}</span></td>
+              <td>${esc(details.join(" · ") || v.notes || "Routine visit")}</td>
+              <td>${statusBadge}</td>
+            </tr>`;
+        }).join("");
+      }
+
+      // Render Follow-Ups Table
+      const fBody = document.getElementById("followups-tbody");
+      const fups = state.follow_ups || [];
+      if (fups.length === 0) {
+        fBody.innerHTML = `<tr><td colspan="4" class="empty-state">No follow-ups scheduled.</td></tr>`;
+      } else {
+        fBody.innerHTML = fups.slice(0, 15).map(f => {
+          const cls = f.status === "ESCALATED" ? "badge-red" : (f.status === "COMPLETED" ? "badge-green" : "badge-amber");
+          return `
+            <tr>
+              <td><strong>${esc(f.beneficiary_name)}</strong></td>
+              <td>${esc(f.due_date)}</td>
+              <td>${esc(f.purpose)}</td>
+              <td><span class="badge ${cls}">${esc(f.status)}</span></td>
+            </tr>`;
+        }).join("");
+      }
+    }
+
+    async function refreshSummary() {
+      try {
+        const res = await fetch("/api/dashboard/summary");
+        if (!res.ok) return;
+        state = await res.json();
+        render();
+      } catch (err) {
+        console.error("Dashboard summary refresh failed:", err);
+      }
+    }
+
+    function connectEventStream() {
+      const dot = document.getElementById("sse-dot");
+      const label = document.getElementById("sse-label");
+      const es = new EventSource("/api/events/stream");
+
+      es.addEventListener("connected", () => {
+        dot.classList.remove("offline");
+        label.textContent = "LIVE STREAM";
+      });
+
+      es.addEventListener("danger_escalation", (ev) => {
+        try {
+          const payload = JSON.parse(ev.data);
+          showLiveBanner(payload);
+          playChime();
+          refreshSummary();
+        } catch (err) {
+          console.error(err);
+        }
+      });
+
+      ["visit_saved", "visit_acknowledged", "patient_saved"].forEach((evName) => {
+        es.addEventListener(evName, () => refreshSummary());
+      });
+
+      es.onerror = () => {
+        dot.classList.add("offline");
+        label.textContent = "Reconnecting...";
+      };
+    }
+
+    document.getElementById("filter-all").addEventListener("click", () => {
+      visitFilter = "all";
+      document.getElementById("filter-all").classList.add("active");
+      document.getElementById("filter-danger").classList.remove("active");
+      render();
+    });
+
+    document.getElementById("filter-danger").addEventListener("click", () => {
+      visitFilter = "danger";
+      document.getElementById("filter-danger").classList.add("active");
+      document.getElementById("filter-all").classList.remove("active");
+      render();
+    });
+
+    document.getElementById("sound-toggle").addEventListener("click", (e) => {
+      soundEnabled = !soundEnabled;
+      e.target.textContent = `Alert Chime: ${soundEnabled ? "ON" : "OFF"}`;
+    });
+
+    refreshSummary();
+    connectEventStream();
+  </script>
+</body>
+</html>

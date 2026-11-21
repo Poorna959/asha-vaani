@@ -69,6 +69,9 @@ CREATE TABLE IF NOT EXISTS visits (
     notes TEXT NOT NULL DEFAULT '',
     raw_transcript TEXT NOT NULL DEFAULT '',
     language_code TEXT NOT NULL DEFAULT 'hi-IN',
+    phc_acknowledged INTEGER NOT NULL DEFAULT 0,
+    phc_acknowledged_at TEXT,
+    phc_acknowledged_by TEXT,
     created_at TEXT NOT NULL
 );
 
@@ -120,7 +123,26 @@ class Database:
         if self.db_path != ":memory:":
             await self._conn.execute("PRAGMA journal_mode = WAL;")
         await self._conn.executescript(SCHEMA_SQL)
+        await self._ensure_migrations()
         await self._conn.commit()
+
+    async def _ensure_migrations(self) -> None:
+        """Apply idempotent schema upgrades for existing local SQLite databases."""
+        async with self.conn.execute("PRAGMA table_info(visits)") as cursor:
+            rows = await cursor.fetchall()
+        existing_cols = {row["name"] for row in rows}
+        if "phc_acknowledged" not in existing_cols:
+            await self.conn.execute(
+                "ALTER TABLE visits ADD COLUMN phc_acknowledged INTEGER NOT NULL DEFAULT 0"
+            )
+        if "phc_acknowledged_at" not in existing_cols:
+            await self.conn.execute(
+                "ALTER TABLE visits ADD COLUMN phc_acknowledged_at TEXT"
+            )
+        if "phc_acknowledged_by" not in existing_cols:
+            await self.conn.execute(
+                "ALTER TABLE visits ADD COLUMN phc_acknowledged_by TEXT"
+            )
 
     async def close(self) -> None:
         """Close the active SQLite connection."""
@@ -436,6 +458,7 @@ class Database:
     # ------------------------------------------------------------------
 
     def _row_to_visit(self, row: aiosqlite.Row) -> VisitRecord:
+        keys = row.keys()
         return VisitRecord(
             id=row["id"],
             beneficiary_id=row["beneficiary_id"],
@@ -451,6 +474,9 @@ class Database:
             raw_transcript=row["raw_transcript"],
             language_code=row["language_code"],
             created_at=row["created_at"],
+            phc_acknowledged=bool(row["phc_acknowledged"]) if "phc_acknowledged" in keys else False,
+            phc_acknowledged_at=row["phc_acknowledged_at"] if "phc_acknowledged_at" in keys else None,
+            phc_acknowledged_by=row["phc_acknowledged_by"] if "phc_acknowledged_by" in keys else None,
         )
 
     async def create_visit(self, payload: VisitRecordCreate) -> VisitRecord:
@@ -533,6 +559,28 @@ class Database:
         async with self.conn.execute(sql, tuple(params)) as cursor:
             rows = await cursor.fetchall()
         return [self._row_to_visit(row) for row in rows]
+
+    async def acknowledge_visit(
+        self,
+        visit_id: str,
+        acknowledged_by: str = "PHC Medical Officer",
+    ) -> Optional[VisitRecord]:
+        """Mark a flagged/escalated visit as acknowledged by the PHC supervisor."""
+        existing = await self.get_visit(visit_id)
+        if existing is None:
+            return None
+        ack_at = utc_now_iso()
+        ack_by = acknowledged_by.strip() or "PHC Medical Officer"
+        await self.conn.execute(
+            """
+            UPDATE visits
+            SET phc_acknowledged = 1, phc_acknowledged_at = ?, phc_acknowledged_by = ?
+            WHERE id = ?
+            """,
+            (ack_at, ack_by, visit_id),
+        )
+        await self.conn.commit()
+        return await self.get_visit(visit_id)
 
     # ------------------------------------------------------------------
     # Follow-Up Queue

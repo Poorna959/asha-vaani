@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 
 from app.config import Settings, get_settings
 from app.db import Database
@@ -24,7 +26,10 @@ from app.pipeline.llm import (
 from app.pipeline.session import VoiceSessionOrchestrator
 from app.routers.registers import router as registers_router
 from app.routers.visits import router as visits_router
+from app.services.event_bus import DashboardEventBus
 from app.services.register_service import RegisterService
+
+DASHBOARD_HTML_PATH = Path(__file__).resolve().parent / "static" / "dashboard.html"
 
 
 def create_app(
@@ -64,6 +69,7 @@ def create_app(
         app.state.compliance_guardrail = compliance_guardrail
         app.state.clinical_engine = engine
         app.state.register_intake_engine = register_intake_engine
+        app.state.event_bus = DashboardEventBus()
         app.state.stt_factory = stt_factory or (lambda: create_stt_client(cfg))
         app.state.tts_factory = tts_factory or (lambda: create_tts_client(cfg))
 
@@ -103,6 +109,11 @@ def create_app(
             "danger_signs_count": len(app.state.danger_detector.canonical_codes),
         }
 
+    @app.get("/dashboard", response_class=HTMLResponse, tags=["dashboard"])
+    async def phc_supervisor_dashboard() -> HTMLResponse:
+        """Serve the zero-build Real-Time PHC Supervisor Escalation Dashboard."""
+        return HTMLResponse(content=DASHBOARD_HTML_PATH.read_text(encoding="utf-8"))
+
     @app.websocket("/ws/session")
     async def voice_session_endpoint(websocket: WebSocket) -> None:
         orchestrator = VoiceSessionOrchestrator(
@@ -113,6 +124,7 @@ def create_app(
             compliance_guardrail=app.state.compliance_guardrail,
             clinical_engine=app.state.clinical_engine,
             register_intake_engine=app.state.register_intake_engine,
+            event_bus=app.state.event_bus,
             stt_client=app.state.stt_factory(),
             tts_client=app.state.tts_factory(),
             settings=cfg,

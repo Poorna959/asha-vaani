@@ -167,6 +167,9 @@ class VisitRecord(VisitRecordCreate):
 
     id: str
     created_at: str = Field(default_factory=utc_now_iso)
+    phc_acknowledged: bool = False
+    phc_acknowledged_at: Optional[str] = None
+    phc_acknowledged_by: Optional[str] = None
 
 
 class FieldDiff(BaseModel):

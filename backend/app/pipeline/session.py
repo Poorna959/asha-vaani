@@ -44,6 +44,7 @@ from app.pipeline.gnani_stt import (
 from app.pipeline.gnani_tts import BaseTTSClient, create_tts_client
 from app.pipeline.llm import ClinicalStateEngine, RegisterIntakeEngine, resolve_active_llm_info
 from app.pipeline.vad import AdaptiveEndpointVAD, VadEvent
+from app.services.event_bus import DashboardEventBus
 from app.services.followup import build_follow_up_create
 from app.services.register_service import (
     PatientNotFoundError,
@@ -69,6 +70,7 @@ class VoiceSessionOrchestrator:
         tts_client: Optional[BaseTTSClient] = None,
         settings: Optional[Settings] = None,
         register_intake_engine: Optional[RegisterIntakeEngine] = None,
+        event_bus: Optional[DashboardEventBus] = None,
     ) -> None:
         self.ws = websocket
         self.db = db
@@ -77,6 +79,7 @@ class VoiceSessionOrchestrator:
         self.compliance_guardrail = compliance_guardrail
         self.clinical_engine = clinical_engine
         self.settings = settings or get_settings()
+        self.event_bus = event_bus
         self.register_intake_engine = register_intake_engine or RegisterIntakeEngine(
             api_key=self.settings.gemini_api_key,
             model=self.settings.gemini_model,
@@ -158,6 +161,53 @@ class VoiceSessionOrchestrator:
             await self._send_json(WsBargeInClearEvent().model_dump())
             return True
         return False
+
+    def _publish_dashboard_event(self, event_type: str, data: dict[str, Any]) -> None:
+        """Broadcast live field events to connected PHC Supervisor Dashboards (non-blocking)."""
+        if self.event_bus is not None:
+            self.event_bus.publish(event_type, data)
+
+    def _publish_danger_escalation(
+        self,
+        alerts: list[DangerSignAlert],
+        transcript: str,
+        active_lang: str,
+    ) -> None:
+        if self.event_bus is None or not alerts:
+            return
+        primary = alerts[0]
+        beneficiary_name = (
+            (self.register_draft.patient_name if self.register_draft else None)
+            or self.draft.beneficiary_name
+            or (self.patient_context or {}).get("beneficiary_name")
+            or "Live Field Alert"
+        )
+        beneficiary_id = (
+            self.draft.beneficiary_id
+            or (self.patient_context or {}).get("beneficiary_id")
+            or "LIVE-SESSION"
+        )
+        visit_type = (
+            (self.register_draft.category if self.register_draft else None)
+            or self.draft.visit_type
+            or (self.patient_context or {}).get("category")
+            or "ANC"
+        )
+        self.event_bus.publish(
+            "danger_escalation",
+            {
+                "code": primary.code,
+                "name": primary.canonical_name,
+                "priority": primary.priority,
+                "localized_instruction": primary.localized_instruction,
+                "all_alerts": [a.model_dump() for a in alerts],
+                "beneficiary_id": beneficiary_id,
+                "beneficiary_name": beneficiary_name,
+                "visit_type": visit_type,
+                "language_code": active_lang,
+                "transcript": transcript,
+            },
+        )
 
     def _resolve_active_llm_model(self, is_register_mode: bool = False) -> str:
         """Return the active/most-recently-used LLM model name for Judge Telemetry HUD."""
@@ -343,6 +393,11 @@ class VoiceSessionOrchestrator:
                     all_alerts=danger_alerts,
                 ).model_dump()
             )
+            self._publish_danger_escalation(
+                alerts=danger_alerts,
+                transcript=event.text,
+                active_lang=active_lang,
+            )
             # P3-01 Parallel Danger-Sign TTS Fast-Path:
             # Begin streaming the FR-6 template-locked localized PHC referral audio immediately
             # in parallel with background LLM structured extraction (< 450ms TTFA).
@@ -409,6 +464,13 @@ class VoiceSessionOrchestrator:
                     self.active_register = await self.register_service.get_register(self.active_register.id)
                     await self._send_json(
                         WsPatientSavedEvent(patient=saved_patient, profile=profile_view).model_dump()
+                    )
+                    self._publish_dashboard_event(
+                        "patient_saved",
+                        {
+                            "patient": saved_patient.model_dump(),
+                            "register_name": self.active_register.name,
+                        },
                     )
                     await self._send_json(
                         WsRegisterIntakeUpdateEvent(
@@ -495,6 +557,11 @@ class VoiceSessionOrchestrator:
                             all_alerts=danger_alerts,
                         ).model_dump()
                     )
+                    self._publish_danger_escalation(
+                        alerts=danger_alerts,
+                        transcript=turn_notes or event.text,
+                        active_lang=active_lang,
+                    )
 
             # Preserve deterministically detected danger signs onto updated draft
             for code in self.draft.danger_signs:
@@ -543,6 +610,13 @@ class VoiceSessionOrchestrator:
                 )
                 await self._send_json(
                     WsVisitSavedEvent(visit=saved_visit, follow_up=saved_follow_up).model_dump()
+                )
+                self._publish_dashboard_event(
+                    "visit_saved",
+                    {
+                        "visit": saved_visit.model_dump(),
+                        "follow_up": saved_follow_up.model_dump(),
+                    },
                 )
                 # Emit final SAVED form state before clearing draft + baseline context for next house
                 await self._send_json(
