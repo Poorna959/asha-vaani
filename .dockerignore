@@ -1,0 +1,15 @@
+.git
+.gitignore
+android/
+web/
+scripts/
+backend/.venv
+backend/.env
+backend/.env.*
+backend/*.db
+backend/*.db-shm
+backend/*.db-wal
+backend/.pytest_cache
+backend/tests
+**/__pycache__
+**/*.pyc
