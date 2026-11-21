@@ -40,6 +40,7 @@ enum class SupportedLanguage(
     val code: String,
     val nativeLabel: String,
 ) {
+    ENGLISH("en-IN", "English"),
     HINDI("hi-IN", "हिन्दी"),
     KANNADA("kn-IN", "ಕನ್ನಡ"),
     TAMIL("ta-IN", "தமிழ்"),

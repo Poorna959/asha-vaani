@@ -1,5 +1,6 @@
 package com.ashavaani.app
 
+import android.media.AudioManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -11,6 +12,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Bind hardware volume keys directly to ASHA Vaani's loudspeaker TTS stream
+        volumeControlStream = AudioManager.STREAM_MUSIC
         appContainer = AppContainer(applicationContext)
         setContent {
             AshaVaaniTheme {

@@ -325,6 +325,11 @@ private fun DspBadgesRow(caps: AudioDspCapabilities) {
             containerColor = AshaColors.SurfaceMuted,
             contentColor = AshaColors.InkSecondary,
         )
+        StatusPill(
+            text = "Loudspeaker · Outdoor",
+            containerColor = AshaColors.VerifiedSurface,
+            contentColor = AshaColors.VerifiedEmerald,
+        )
     }
 }
 

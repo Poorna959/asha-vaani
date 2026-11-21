@@ -114,4 +114,39 @@ class PcmAudioEngineTest {
         assertArrayEquals(byteArrayOf(9, 10, 11, 12), next)
         assertNull(controller.pollActiveChunk())
     }
+
+    @Test
+    fun `P3-06 outdoor pcm gain booster amplifies speech safely without int16 wraparound`() {
+        val silence = ByteArray(PcmAudioConfig.FRAME_BYTES)
+        assertArrayEquals(silence, PcmGainBooster.boost16BitLe(silence, gain = 1.85f))
+
+        // Mid-level positive & negative samples scale cleanly by ~1.85x
+        val midSamples = byteArrayOf(
+            (1000 and 0xFF).toByte(),
+            ((1000 shr 8) and 0xFF).toByte(),
+            ((-1000) and 0xFF).toByte(),
+            (((-1000) shr 8) and 0xFF).toByte(),
+            // Peak sample near Short.MAX_VALUE must clamp cleanly to 32767 (no negative overflow!)
+            (25000 and 0xFF).toByte(),
+            ((25000 shr 8) and 0xFF).toByte(),
+            ((-25000) and 0xFF).toByte(),
+            (((-25000) shr 8) and 0xFF).toByte(),
+        )
+        val boosted = PcmGainBooster.boost16BitLe(midSamples, gain = 1.85f)
+        fun readShort(buf: ByteArray, idx: Int): Int =
+            (buf[idx * 2 + 1].toInt() shl 8) or (buf[idx * 2].toInt() and 0xFF)
+
+        assertEquals(1850, readShort(boosted, 0))
+        assertEquals(-1850, readShort(boosted, 1))
+        assertEquals(Short.MAX_VALUE.toInt(), readShort(boosted, 2))
+        assertEquals(Short.MIN_VALUE.toInt(), readShort(boosted, 3))
+    }
+
+    @Test
+    fun `P3-06 explicit English language pill maps en-IN cleanly`() {
+        val en = com.ashavaani.app.model.SupportedLanguage.fromCode("en-IN")
+        assertEquals(com.ashavaani.app.model.SupportedLanguage.ENGLISH, en)
+        assertEquals("English", en.nativeLabel)
+        assertEquals("en-IN", en.code)
+    }
 }

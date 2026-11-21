@@ -25,7 +25,7 @@ class AppContainer(context: Context) {
     )
     val voiceSessionClient: VoiceSessionClient = VoiceSessionClient()
     val audioCapturer: PcmAudioCapturer = PcmAudioCapturer()
-    val audioPlayer: PcmAudioPlayer = PcmAudioPlayer()
+    val audioPlayer: PcmAudioPlayer = PcmAudioPlayer(context = appContext)
 
     fun release() {
         audioCapturer.release()
