@@ -34,21 +34,45 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
 import okio.ByteString.Companion.toByteString
+import java.util.UUID
 import java.util.concurrent.TimeUnit
+
+/**
+ * Bounded exponential-backoff policy for WebSocket auto-reconnect in rural low-signal zones:
+ * attempt 1 -> 1s, attempt 2 -> 2s, attempt 3 -> 4s, attempt 4 -> 8s, attempt 5 -> 8s, >5 -> stop.
+ */
+data class ReconnectBackoffPolicy(
+    val baseDelayMs: Long = 1_000L,
+    val maxDelayMs: Long = 8_000L,
+    val maxAttempts: Int = 5,
+) {
+    fun nextDelayMs(attempt: Int): Long? {
+        if (attempt < 1 || attempt > maxAttempts) return null
+        val shift = (attempt - 1).coerceAtMost(10)
+        val computed = baseDelayMs * (1L shl shift)
+        return computed.coerceAtMost(maxDelayMs)
+    }
+}
 
 /**
  * Full-duplex OkHttp WebSocket client for `/ws/session`.
  *
  * Streams binary 16kHz 16-bit mono PCM audio frames upstream + JSON control events,
- * and routes downstream binary Timbre v3.0 PCM audio + typed [WsServerEvent]s with automatic
- * exponential-backoff reconnect and offline cache state reporting.
+ * and routes downstream binary Timbre v3.0 PCM audio + typed [WsServerEvent]s with bounded
+ * exponential-backoff reconnect (1s -> 2s -> 4s -> 8s, max 5 retries) preserving session state.
  */
 class VoiceSessionClient(
     private val httpClient: OkHttpClient = defaultWebSocketClient(),
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+    private val backoffPolicy: ReconnectBackoffPolicy = ReconnectBackoffPolicy(),
 ) {
     private val _connectionState = MutableStateFlow(ConnectionState.OFFLINE_CACHE)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
+
+    private val _reconnectAttemptCount = MutableStateFlow(0)
+    val reconnectAttemptCount: StateFlow<Int> = _reconnectAttemptCount.asStateFlow()
+
+    val sessionId: String = "ANDROID-${UUID.randomUUID().toString().take(8).uppercase()}"
 
     private val _events = MutableSharedFlow<WsServerEvent>(extraBufferCapacity = 64)
     val events: SharedFlow<WsServerEvent> = _events.asSharedFlow()
@@ -89,6 +113,7 @@ class VoiceSessionClient(
         lastPatientId = patientId
         lastRegisterId = registerId
         reconnectAttempt = 0
+        _reconnectAttemptCount.value = 0
         openSocketInternal()
     }
 
@@ -174,10 +199,14 @@ class VoiceSessionClient(
             activeSocket = null
         }
 
-        val request = Request.Builder().url(wsUrl).build()
+        val request = Request.Builder()
+            .url(wsUrl)
+            .header("X-Session-ID", sessionId)
+            .build()
         val listener = object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 reconnectAttempt = 0
+                _reconnectAttemptCount.value = 0
                 _connectionState.value = ConnectionState.CONNECTED
                 val startMsg = WsSessionStart(
                     languageCode = lastLanguageCode,
@@ -245,11 +274,14 @@ class VoiceSessionClient(
     private fun scheduleReconnect() {
         reconnectJob?.cancel()
         reconnectAttempt += 1
-        val delayMs = when (reconnectAttempt) {
-            1 -> 1_500L
-            2 -> 3_000L
-            else -> 5_000L
+        val delayMs = backoffPolicy.nextDelayMs(reconnectAttempt)
+        if (delayMs == null) {
+            _reconnectAttemptCount.value = backoffPolicy.maxAttempts
+            _connectionState.value = ConnectionState.OFFLINE_CACHE
+            return
         }
+        _reconnectAttemptCount.value = reconnectAttempt
+        _connectionState.value = ConnectionState.RECONNECTING
         reconnectJob = scope.launch {
             delay(delayMs)
             if (!manuallyClosed) {

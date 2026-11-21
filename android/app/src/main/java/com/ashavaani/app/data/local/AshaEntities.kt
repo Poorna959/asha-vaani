@@ -81,6 +81,28 @@ data class FollowUpEntity(
     val createdAt: String,
 )
 
+/**
+ * FIFO offline pending-sync outbox row queued when backend is unreachable in rural dead zones.
+ */
+@Entity(
+    tableName = "pending_sync_outbox",
+    indices = [Index(value = ["createdAt"])],
+)
+data class PendingSyncEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    val opType: String,
+    val targetId: String,
+    val payloadJson: String,
+    val createdAt: String,
+)
+
+object PendingSyncOp {
+    const val CREATE_REGISTER = "CREATE_REGISTER"
+    const val ADD_PATIENT = "ADD_PATIENT"
+    const val UPDATE_PATIENT = "UPDATE_PATIENT"
+    const val UPDATE_FOLLOW_UP_STATUS = "UPDATE_FOLLOW_UP_STATUS"
+}
+
 // ---------------------------------------------------------------------------
 // Lossless Domain <-> Room Entity Mappers
 // ---------------------------------------------------------------------------

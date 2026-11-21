@@ -140,8 +140,14 @@ data class WsPatientSavedEvent(
 data class WsMetricsEvent(
     @SerialName("ttfa_ms") val ttfaMs: Double,
     @SerialName("asr_latency_ms") val asrLatencyMs: Double = 0.0,
+    @SerialName("stt_latency_ms") val sttLatencyMs: Double = 0.0,
     @SerialName("llm_latency_ms") val llmLatencyMs: Double = 0.0,
     @SerialName("tts_latency_ms") val ttsLatencyMs: Double = 0.0,
+    @SerialName("tts_ttfa_ms") val ttsTtfaMs: Double = 0.0,
+    @SerialName("barge_in_cutoff_ms") val bargeInCutoffMs: Double? = null,
+    @SerialName("noise_floor_rms") val noiseFloorRms: Double = 0.0,
+    @SerialName("active_llm_model") val activeLlmModel: String = "",
+    @SerialName("danger_fast_path") val dangerFastPath: Boolean = false,
 ) : WsServerEvent
 
 @Serializable

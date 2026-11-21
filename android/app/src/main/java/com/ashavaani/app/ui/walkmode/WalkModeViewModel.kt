@@ -9,6 +9,7 @@ import com.ashavaani.app.audio.PcmAudioPlayer
 import com.ashavaani.app.data.AshaRepository
 import com.ashavaani.app.data.local.AppSettingsStore
 import com.ashavaani.app.data.remote.VoiceSessionClient
+import com.ashavaani.app.model.ConnectionState
 import com.ashavaani.app.model.RegisterIntakeDraft
 import com.ashavaani.app.model.SupportedLanguage
 import com.ashavaani.app.model.VisitDraft
@@ -133,7 +134,44 @@ class WalkModeViewModel(
         }
         viewModelScope.launch {
             voiceClient.connectionState.collect { conn ->
+                val previous = _uiState.value.connectionState
                 _uiState.update { it.copy(connectionState = conn) }
+                if (conn == ConnectionState.CONNECTED && previous != ConnectionState.CONNECTED) {
+                    val synced = runCatching { repository.flushPendingSyncOutbox() }.getOrDefault(0)
+                    if (synced > 0) {
+                        _uiState.update {
+                            it.copy(toastMessage = "Synced $synced offline record${if (synced == 1) "" else "s"}")
+                        }
+                    }
+                    repository.refreshAllFromServer()
+                }
+            }
+        }
+        viewModelScope.launch {
+            voiceClient.reconnectAttemptCount.collect { attempts ->
+                _uiState.update { it.copy(reconnectAttempts = attempts) }
+            }
+        }
+        viewModelScope.launch {
+            repository.observePendingSyncCount().collect { count ->
+                _uiState.update { it.copy(pendingSyncCount = count) }
+            }
+        }
+        viewModelScope.launch {
+            repository.isSyncingOutbox.collect { syncing ->
+                _uiState.update { it.copy(isSyncingOutbox = syncing) }
+            }
+        }
+    }
+
+    fun syncPendingOutboxNow() {
+        viewModelScope.launch {
+            val synced = runCatching { repository.flushPendingSyncOutbox() }.getOrDefault(0)
+            if (synced > 0) {
+                _uiState.update {
+                    it.copy(toastMessage = "Synced $synced offline record${if (synced == 1) "" else "s"}")
+                }
+                repository.refreshAllFromServer()
             }
         }
     }

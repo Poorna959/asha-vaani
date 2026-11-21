@@ -52,6 +52,7 @@ import com.ashavaani.app.ui.theme.ClinicalValueTextStyle
 fun SettingsSheet(
     uiState: WalkModeUiState,
     onSaveAndReconnect: (backendUrl: String, phcPhone: String) -> Unit,
+    onSyncOutboxNow: () -> Unit = {},
     onDismiss: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -99,10 +100,10 @@ fun SettingsSheet(
 
             HorizontalDivider(color = AshaColors.DividerSubtle)
 
-            // 4-Tile Latency Breakdown
+            // Expanded Judge Telemetry HUD (P3-04)
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    text = "LAST TURN LATENCY (TARGET < 800ms)",
+                    text = "SPEECH-LAYER TELEMETRY (TARGET TTFA < 800ms)",
                     style = MaterialTheme.typography.labelSmall,
                 )
                 Row(
@@ -118,8 +119,8 @@ fun SettingsSheet(
                         modifier = Modifier.weight(1f),
                     )
                     MetricTile(
-                        label = "ASR",
-                        value = uiState.metrics.asrMs?.let { "${it}ms" } ?: "—",
+                        label = "STT",
+                        value = (uiState.metrics.sttMs ?: uiState.metrics.asrMs)?.let { "${it}ms" } ?: "—",
                         modifier = Modifier.weight(1f),
                     )
                     MetricTile(
@@ -128,13 +129,82 @@ fun SettingsSheet(
                         modifier = Modifier.weight(1f),
                     )
                     MetricTile(
-                        label = "BARGE-IN",
-                        value = uiState.metrics.bargeInFlushMs?.let {
-                            String.format("%.1fms", it)
-                        } ?: "—",
-                        highlight = uiState.metrics.bargeInFlushMs != null && uiState.metrics.bargeInFlushMs < 150f,
+                        label = "TTS TTFA",
+                        value = (uiState.metrics.ttsTtfaMs ?: uiState.metrics.ttsMs)?.let { "${it}ms" } ?: "—",
                         modifier = Modifier.weight(1f),
                     )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    val bargeMs = uiState.metrics.bargeInFlushMs ?: uiState.metrics.serverBargeInCutoffMs
+                    MetricTile(
+                        label = "BARGE-IN",
+                        value = bargeMs?.let { String.format("%.1fms", it) } ?: "—",
+                        highlight = bargeMs != null && bargeMs < 150f,
+                        modifier = Modifier.weight(1f),
+                    )
+                    MetricTile(
+                        label = "NOISE RMS",
+                        value = uiState.metrics.noiseFloorRms?.let {
+                            String.format("%.4f", it)
+                        } ?: "—",
+                        modifier = Modifier.weight(1f),
+                    )
+                    MetricTile(
+                        label = "FAST-PATH",
+                        value = if (uiState.metrics.dangerFastPath) "ON" else "STD",
+                        highlight = uiState.metrics.dangerFastPath,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+
+                // Active LLM model & Offline Sync Outbox status strip
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    val llmName = uiState.metrics.activeLlmModel.ifBlank { "Auto (Groq / Fallback)" }
+                    StatusPill(
+                        text = "LLM: $llmName",
+                        containerColor = AshaColors.ClinicalTealTint,
+                        contentColor = AshaColors.ClinicalTeal,
+                    )
+                    if (uiState.pendingSyncCount > 0 || uiState.isSyncingOutbox) {
+                        StatusPill(
+                            text = if (uiState.isSyncingOutbox) {
+                                "Syncing outbox..."
+                            } else {
+                                "Offline · ${uiState.pendingSyncCount} queued"
+                            },
+                            containerColor = AshaColors.VoiceDiffSurface,
+                            contentColor = AshaColors.VoiceDiffAmberDark,
+                        )
+                    } else {
+                        StatusPill(
+                            text = "Outbox: Synced",
+                            containerColor = AshaColors.VerifiedSurface,
+                            contentColor = AshaColors.VerifiedEmerald,
+                        )
+                    }
+                }
+
+                if (uiState.pendingSyncCount > 0 && !uiState.isSyncingOutbox) {
+                    Button(
+                        onClick = onSyncOutboxNow,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = AshaColors.VoiceDiffAmber,
+                            contentColor = AshaColors.PureWhite,
+                        ),
+                    ) {
+                        Text(
+                            text = "Sync ${uiState.pendingSyncCount} Queued Record${if (uiState.pendingSyncCount == 1) "" else "s"} Now",
+                            style = MaterialTheme.typography.labelMedium,
+                        )
+                    }
                 }
             }
 

@@ -202,4 +202,35 @@ class WalkModeStateReducerTest {
         assertNull(afterPatientSaved.registerIntakeDraft?.patientName)
         assertTrue(afterPatientSaved.toastMessage?.contains("Savitha Rao") == true)
     }
+
+    @Test
+    fun `P3-04 reducer maps expanded speech telemetry fields including danger_fast_path and active_llm_model`() {
+        val decoded = com.ashavaani.app.model.AshaJson.decodeFromString<com.ashavaani.app.model.WsServerEvent>(
+            """
+            {
+              "type": "metrics",
+              "ttfa_ms": 382.4,
+              "asr_latency_ms": 64.0,
+              "stt_latency_ms": 64.0,
+              "llm_latency_ms": 0.0,
+              "tts_latency_ms": 318.2,
+              "tts_ttfa_ms": 318.2,
+              "barge_in_cutoff_ms": 4.2,
+              "noise_floor_rms": 0.0082,
+              "active_llm_model": "qwen/qwen3.8-27b",
+              "danger_fast_path": true
+            }
+            """.trimIndent()
+        )
+        assertTrue(decoded is WsMetricsEvent)
+        val reduced = WalkModeStateReducer.reduceServerEvent(WalkModeUiState(), decoded)
+        assertEquals(382, reduced.metrics.ttfaMs)
+        assertEquals(64, reduced.metrics.sttMs)
+        assertEquals(0, reduced.metrics.llmMs)
+        assertEquals(318, reduced.metrics.ttsTtfaMs)
+        assertEquals(4.2f, reduced.metrics.serverBargeInCutoffMs!!, 0.01f)
+        assertEquals(0.0082f, reduced.metrics.noiseFloorRms!!, 0.0001f)
+        assertEquals("qwen/qwen3.8-27b", reduced.metrics.activeLlmModel)
+        assertTrue(reduced.metrics.dangerFastPath)
+    }
 }

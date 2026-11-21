@@ -1,6 +1,7 @@
 package com.ashavaani.app.ui.navigation
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -148,6 +149,9 @@ fun AshaVaaniAppShell(
                 connectionState = walkUiState.connectionState,
                 ttfaMs = walkUiState.metrics.ttfaMs,
                 gnaniMode = walkUiState.gnaniMode,
+                pendingSyncCount = walkUiState.pendingSyncCount,
+                isSyncingOutbox = walkUiState.isSyncingOutbox,
+                onSyncChipClick = walkModeViewModel::syncPendingOutboxNow,
                 onTelemetryClick = { showSettingsSheet = true },
             )
         },
@@ -315,6 +319,7 @@ fun AshaVaaniAppShell(
         SettingsSheet(
             uiState = walkUiState,
             onSaveAndReconnect = walkModeViewModel::saveSettingsAndReconnect,
+            onSyncOutboxNow = walkModeViewModel::syncPendingOutboxNow,
             onDismiss = { showSettingsSheet = false },
         )
     }
@@ -327,6 +332,9 @@ private fun AshaTopBar(
     connectionState: ConnectionState,
     ttfaMs: Int?,
     gnaniMode: String,
+    pendingSyncCount: Int = 0,
+    isSyncingOutbox: Boolean = false,
+    onSyncChipClick: () -> Unit = {},
     onTelemetryClick: () -> Unit,
 ) {
     Surface(
@@ -382,6 +390,35 @@ private fun AshaTopBar(
                     gnaniMode = gnaniMode,
                     onClick = onTelemetryClick,
                 )
+            }
+            if (pendingSyncCount > 0 || isSyncingOutbox) {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 16.dp, end = 16.dp, bottom = 8.dp)
+                        .clickable(enabled = !isSyncingOutbox, onClick = onSyncChipClick),
+                    shape = RoundedCornerShape(10.dp),
+                    color = if (isSyncingOutbox) AshaColors.ClinicalTealTint else AshaColors.VoiceDiffSurface,
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = if (isSyncingOutbox) {
+                                "Syncing offline records to server..."
+                            } else {
+                                "Offline · $pendingSyncCount queued (tap to sync when online)"
+                            },
+                            color = if (isSyncingOutbox) AshaColors.ClinicalTeal else AshaColors.VoiceDiffAmberDark,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                }
             }
             HorizontalDivider(thickness = 1.dp, color = AshaColors.DividerSubtle)
         }

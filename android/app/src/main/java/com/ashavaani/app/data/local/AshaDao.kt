@@ -23,6 +23,9 @@ interface AshaDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertRegister(item: CustomRegisterEntity)
 
+    @Query("DELETE FROM custom_registers WHERE id = :registerId")
+    suspend fun deleteRegisterById(registerId: String)
+
     // --- Patients ---
 
     @Query("SELECT * FROM patients WHERE registerId = :registerId ORDER BY updatedAt DESC, patientName ASC")
@@ -52,6 +55,9 @@ interface AshaDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertPatient(item: PatientEntity)
+
+    @Query("DELETE FROM patients WHERE id = :patientId")
+    suspend fun deletePatientById(patientId: String)
 
     // --- Visits ---
 
@@ -95,4 +101,21 @@ interface AshaDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertFollowUp(item: FollowUpEntity)
+
+    @Query("SELECT * FROM follow_ups WHERE id = :followUpId LIMIT 1")
+    suspend fun getFollowUpById(followUpId: String): FollowUpEntity?
+
+    // --- Offline Pending-Sync Outbox (P3-04) ---
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun enqueuePendingSync(item: PendingSyncEntity): Long
+
+    @Query("SELECT * FROM pending_sync_outbox ORDER BY id ASC")
+    suspend fun getPendingSyncItems(): List<PendingSyncEntity>
+
+    @Query("SELECT COUNT(*) FROM pending_sync_outbox")
+    fun observePendingSyncCount(): Flow<Int>
+
+    @Query("DELETE FROM pending_sync_outbox WHERE id = :outboxId")
+    suspend fun deletePendingSyncById(outboxId: Long)
 }

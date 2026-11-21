@@ -26,15 +26,24 @@ enum class WalkInputMode {
 data class LatencyMetrics(
     val ttfaMs: Int? = null,
     val asrMs: Int? = null,
+    val sttMs: Int? = null,
     val llmMs: Int? = null,
     val ttsMs: Int? = null,
+    val ttsTtfaMs: Int? = null,
     val bargeInFlushMs: Float? = null,
+    val serverBargeInCutoffMs: Float? = null,
+    val noiseFloorRms: Float? = null,
+    val activeLlmModel: String = "",
+    val dangerFastPath: Boolean = false,
 )
 
 data class WalkModeUiState(
     val connectionState: ConnectionState = ConnectionState.OFFLINE_CACHE,
     val gnaniMode: String = "MOCK",
     val isMockMode: Boolean = true,
+    val pendingSyncCount: Int = 0,
+    val isSyncingOutbox: Boolean = false,
+    val reconnectAttempts: Int = 0,
     val activeLanguage: SupportedLanguage = SupportedLanguage.HINDI,
     val inputMode: WalkInputMode = WalkInputMode.ROUTINE_VISIT,
     val sessionStatus: String = "LISTENING",
@@ -185,12 +194,20 @@ object WalkModeStateReducer {
         }
 
         is WsMetricsEvent -> {
+            val sttVal = if (event.sttLatencyMs > 0.0) event.sttLatencyMs else event.asrLatencyMs
+            val ttsTtfaVal = if (event.ttsTtfaMs > 0.0) event.ttsTtfaMs else event.ttsLatencyMs
             state.copy(
                 metrics = state.metrics.copy(
                     ttfaMs = event.ttfaMs.toInt(),
                     asrMs = event.asrLatencyMs.toInt(),
+                    sttMs = sttVal.toInt(),
                     llmMs = event.llmLatencyMs.toInt(),
                     ttsMs = event.ttsLatencyMs.toInt(),
+                    ttsTtfaMs = ttsTtfaVal.toInt(),
+                    serverBargeInCutoffMs = event.bargeInCutoffMs?.toFloat() ?: state.metrics.serverBargeInCutoffMs,
+                    noiseFloorRms = event.noiseFloorRms.toFloat(),
+                    activeLlmModel = event.activeLlmModel.ifBlank { state.metrics.activeLlmModel },
+                    dangerFastPath = event.dangerFastPath,
                 )
             )
         }

@@ -40,19 +40,19 @@ data class ExportedFile(
  * OkHttp REST client covering all Phase P1 FastAPI endpoints (`/health`, `/api/registers`,
  * `/api/patients`, `/api/visits`, `/api/follow-ups`, `/api/danger-signs`, and `.xlsx`/`.csv` exports).
  */
-class AshaApiClient(
+open class AshaApiClient(
     private val httpClient: OkHttpClient = defaultHttpClient(),
 ) {
-    suspend fun fetchHealth(baseUrl: String): HealthResponse =
+    open suspend fun fetchHealth(baseUrl: String): HealthResponse =
         getJson(ServerUrlResolver.buildRestUrl(baseUrl, "/health"))
 
-    suspend fun listRegisters(baseUrl: String): List<CustomRegister> =
+    open suspend fun listRegisters(baseUrl: String): List<CustomRegister> =
         getJson(ServerUrlResolver.buildRestUrl(baseUrl, "/api/registers"))
 
-    suspend fun getRegister(baseUrl: String, registerId: String): CustomRegister =
+    open suspend fun getRegister(baseUrl: String, registerId: String): CustomRegister =
         getJson(ServerUrlResolver.buildRestUrl(baseUrl, "/api/registers/$registerId"))
 
-    suspend fun createRegister(
+    open suspend fun createRegister(
         baseUrl: String,
         payload: CustomRegisterCreate,
     ): CustomRegister = postJson(
@@ -60,7 +60,7 @@ class AshaApiClient(
         bodyJson = AshaJson.encodeToString(payload),
     )
 
-    suspend fun addRegisterField(
+    open suspend fun addRegisterField(
         baseUrl: String,
         registerId: String,
         field: RegisterFieldCreate,
@@ -69,14 +69,14 @@ class AshaApiClient(
         bodyJson = AshaJson.encodeToString(field),
     )
 
-    suspend fun searchRegisterPatients(
+    open suspend fun searchRegisterPatients(
         baseUrl: String,
         registerId: String,
         query: String = "",
     ): List<PatientRecord> =
         getJson(ServerUrlResolver.buildPatientsSearchUrl(baseUrl, registerId, query))
 
-    suspend fun addPatientToRegister(
+    open suspend fun addPatientToRegister(
         baseUrl: String,
         registerId: String,
         payload: PatientRecordCreate,
@@ -85,13 +85,13 @@ class AshaApiClient(
         bodyJson = AshaJson.encodeToString(payload),
     )
 
-    suspend fun getPatientProfile(
+    open suspend fun getPatientProfile(
         baseUrl: String,
         patientId: String,
     ): PatientProfileView =
         getJson(ServerUrlResolver.buildRestUrl(baseUrl, "/api/patients/$patientId/profile"))
 
-    suspend fun updatePatient(
+    open suspend fun updatePatient(
         baseUrl: String,
         patientId: String,
         payload: PatientRecordUpdate,
@@ -100,13 +100,13 @@ class AshaApiClient(
         bodyJson = AshaJson.encodeToString(payload),
     )
 
-    suspend fun getPatientFollowUpContext(
+    open suspend fun getPatientFollowUpContext(
         baseUrl: String,
         patientId: String,
     ): PatientFollowUpContext =
         getJson(ServerUrlResolver.buildRestUrl(baseUrl, "/api/patients/$patientId/followup-context"))
 
-    suspend fun listVisits(
+    open suspend fun listVisits(
         baseUrl: String,
         beneficiaryId: String? = null,
         onlyDanger: Boolean = false,
@@ -119,7 +119,7 @@ class AshaApiClient(
         return getJson(ServerUrlResolver.buildRestUrl(baseUrl, "/api/visits$query"))
     }
 
-    suspend fun listFollowUps(
+    open suspend fun listFollowUps(
         baseUrl: String,
         status: String? = null,
         beneficiaryId: String? = null,
@@ -132,7 +132,7 @@ class AshaApiClient(
         return getJson(ServerUrlResolver.buildRestUrl(baseUrl, "/api/follow-ups$query"))
     }
 
-    suspend fun updateFollowUpStatus(
+    open suspend fun updateFollowUpStatus(
         baseUrl: String,
         followUpId: String,
         status: String,
