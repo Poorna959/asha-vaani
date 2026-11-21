@@ -1,0 +1,407 @@
+.pageGrid {
+  display: grid;
+  gap: 1.75rem;
+}
+
+.pageHead {
+  max-width: 720px;
+}
+
+.pageHead h1 {
+  font-size: clamp(2rem, 4.2vw, 3rem);
+  margin-top: 0.5rem;
+}
+
+.pageHead p {
+  margin-top: 0.75rem;
+  font-size: 1.1rem;
+  color: var(--ink-2);
+}
+
+.errorContent {
+  flex: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.releaseCard {
+  padding: clamp(1.35rem, 3.5vw, 2.2rem);
+}
+
+.comingSoonGrid {
+  display: grid;
+  grid-template-columns: 1.15fr 0.85fr;
+  gap: 2rem;
+  align-items: start;
+}
+
+.publishedGrid {
+  display: grid;
+  grid-template-columns: 1fr 240px;
+  gap: 2rem;
+  align-items: start;
+}
+
+.releaseMain {
+  display: grid;
+  gap: 1.2rem;
+  min-width: 0;
+}
+
+.statusRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.releaseHeading {
+  font-size: clamp(1.55rem, 3vw, 2.15rem);
+}
+
+.releaseLead {
+  color: var(--ink-2);
+  font-size: 1.02rem;
+  max-width: 62ch;
+}
+
+.ctaRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.metaGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.75rem;
+  margin: 0;
+  padding: 1rem;
+  border-radius: var(--radius-sm);
+  border: var(--border-w) solid var(--border-soft);
+  background: var(--canvas);
+}
+
+.metaGrid dt {
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  color: var(--ink-muted);
+}
+
+.metaGrid dd {
+  margin: 0.2rem 0 0;
+  font-weight: 800;
+  font-size: 0.95rem;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.checksumArea {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.notesBox {
+  padding: 1rem 1.15rem;
+  border-radius: var(--radius-sm);
+  border: var(--border-w) solid var(--teal-border);
+  background: var(--teal-50);
+}
+
+.notesBox h3 {
+  font-size: 0.95rem;
+  color: var(--teal-900);
+}
+
+.notesBox ul {
+  margin-top: 0.5rem;
+  padding-left: 1.2rem;
+  display: grid;
+  gap: 0.3rem;
+  font-size: 0.92rem;
+  color: var(--ink-2);
+}
+
+.qrAside {
+  display: grid;
+  justify-items: center;
+  text-align: center;
+  gap: 0.55rem;
+  padding: 1.25rem;
+  border-radius: var(--radius);
+  border: var(--border-w) solid var(--border-soft);
+  background: var(--canvas);
+}
+
+.qrAside h3 {
+  font-size: 0.95rem;
+  margin-top: 0.25rem;
+}
+
+.qrAside p {
+  font-size: 0.83rem;
+  color: var(--ink-2);
+}
+
+/* ---------- Checklist ---------- */
+.checklistBox {
+  padding: 1.25rem;
+  border-radius: var(--radius);
+  border: var(--border-w) solid var(--border-soft);
+  background: var(--canvas);
+}
+
+.checklistBox h3 {
+  font-size: 1rem;
+}
+
+.checklist {
+  list-style: none;
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 0.9rem;
+}
+
+.checklistItem {
+  padding: 0.75rem 0.85rem;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.checklistTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.checklistItem p {
+  margin-top: 0.3rem;
+  font-size: 0.83rem;
+  color: var(--ink-2);
+}
+
+/* ---------- History ---------- */
+.historyCard {
+  padding: 1.5rem;
+}
+
+.historyCard h2 {
+  font-size: 1.35rem;
+  margin-top: 0.25rem;
+}
+
+.historyList {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.historyItem {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.85rem 1rem;
+  border-radius: 12px;
+  border: 1px solid var(--border-soft);
+  background: var(--canvas);
+}
+
+.historyCode {
+  font-weight: 600;
+  color: var(--ink-muted);
+}
+
+.historyMeta {
+  margin-top: 0.2rem;
+  font-size: 0.84rem;
+  color: var(--ink-2);
+}
+
+/* ---------- Multilingual Guide ---------- */
+.guideCard {
+  padding: clamp(1.35rem, 3.5vw, 2.1rem);
+}
+
+.guideHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-bottom: 1.25rem;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.guideHeader h2 {
+  font-size: clamp(1.4rem, 2.8vw, 1.9rem);
+  margin-top: 0.3rem;
+}
+
+.langTabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.langTab {
+  min-height: 42px;
+  padding: 0.4rem 0.9rem;
+  border-radius: var(--radius-pill);
+  border: var(--border-w) solid var(--border);
+  background: var(--canvas);
+  font-weight: 700;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.langTab[data-selected="true"] {
+  background: var(--teal-700);
+  border-color: var(--teal-700);
+  color: #fff;
+}
+
+.guideBody {
+  margin-top: 1.35rem;
+  display: grid;
+  gap: 1.5rem;
+}
+
+.guideSteps {
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 1rem;
+}
+
+.guideStep {
+  display: flex;
+  gap: 0.8rem;
+  padding: 1rem;
+  border-radius: 14px;
+  border: var(--border-w) solid var(--border-soft);
+  background: var(--canvas);
+}
+
+.guideStepNum {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  background: var(--teal-700);
+  color: #fff;
+  font-weight: 800;
+  font-size: 0.9rem;
+}
+
+.guideStep h3 {
+  font-size: 1rem;
+}
+
+.guideStep p {
+  margin-top: 0.3rem;
+  font-size: 0.9rem;
+  color: var(--ink-2);
+}
+
+.troubleshootBox {
+  padding: 1.15rem 1.25rem;
+  border-radius: 14px;
+  border: var(--border-w) solid var(--border);
+  background: var(--surface);
+}
+
+.troubleshootBox h3 {
+  font-size: 1.02rem;
+}
+
+.troubleshootGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1rem;
+  margin-top: 0.75rem;
+}
+
+.troubleshootItem h4 {
+  font-size: 0.93rem;
+}
+
+.troubleshootItem p {
+  margin-top: 0.25rem;
+  font-size: 0.88rem;
+  color: var(--ink-2);
+}
+
+/* ---------- Requirements ---------- */
+.requirementsCard {
+  padding: clamp(1.35rem, 3.5vw, 2rem);
+}
+
+.requirementsGrid {
+  display: grid;
+  grid-template-columns: 0.9fr 1.1fr;
+  gap: 2rem;
+  align-items: start;
+}
+
+.requirementsGrid h2 {
+  font-size: 1.45rem;
+  margin-top: 0.3rem;
+}
+
+.requirementsGrid p {
+  margin-top: 0.5rem;
+  color: var(--ink-2);
+}
+
+.reqList {
+  display: grid;
+  gap: 0.8rem;
+  margin: 0;
+}
+
+.reqList div {
+  padding: 0.75rem 0.95rem;
+  border-radius: 12px;
+  border: 1px solid var(--border-soft);
+  background: var(--canvas);
+}
+
+.reqList dt {
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+
+.reqList dd {
+  margin: 0.2rem 0 0;
+  font-weight: 700;
+  font-size: 0.93rem;
+  color: var(--ink);
+}
+
+@media (max-width: 920px) {
+  .comingSoonGrid,
+  .publishedGrid,
+  .requirementsGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 560px) {
+  .metaGrid {
+    grid-template-columns: 1fr;
+  }
+}

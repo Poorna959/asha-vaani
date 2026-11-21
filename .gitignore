@@ -25,10 +25,16 @@ venv/
 .kotlin/
 build/
 app/build/
-*.apk
-*.aab
+android/**/*.apk
+android/**/*.aab
 local.properties
 .cxx/
+
+# Web Portal (Vercel)
+web/node_modules/
+web/dist/
+web/coverage/
+!web/public/downloads/*.apk
 
 # Exports & Temporary
 *.xlsx

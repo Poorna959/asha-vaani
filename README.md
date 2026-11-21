@@ -20,7 +20,9 @@
 - **Real-Time PHC Supervisor Escalation Console (`/dashboard`)**:
   - Zero-build FastAPI web dashboard fed by Server-Sent Events (`GET /api/events/stream`) that flashes Crimson danger alerts live on the laptop the instant an ASHA worker flags a danger sign on Android, with 1-click **Acknowledge PHC Referral** (`PATCH /api/visits/{id}/acknowledge`).
 - **Native Android Outdoor Client (`android/`)**:
-  - Kotlin 2.0 + Jetpack Compose Material 3 Outdoor Daylight UI, 16kHz PCM `AudioRecord`/`AudioTrack` with hardware `AEC`/`NS`/`AGC`, **Room v2 Offline Pending-Sync Outbox** (`PendingSyncEntity` + FIFO replay on reconnect), bounded WebSocket reconnect backoff (`1s → 2s → 4s → 8s`), expanded Judge Telemetry HUD, and **Custom First-Visit Registers** (`Field : Answer` profiles, live search, `.xlsx`/`.csv` `FileProvider` export, FR-7.2 voice intake, and FR-7.6 follow-up baseline continuity).
+  - Kotlin 2.0 + Jetpack Compose Material 3 Outdoor Daylight UI, **Supabase Gmail & Email Authentication** (`LoginScreen` + OAuth deep-link `ashavaani://auth/callback` + 1-tap offline field demo access), 16kHz PCM `AudioRecord`/`AudioTrack` with hardware `AEC`/`NS`/`AGC` + `AcousticEchoGate`, **Room v2 Offline Pending-Sync Outbox** (`PendingSyncEntity` + FIFO replay on reconnect), bounded WebSocket reconnect backoff (`1s → 2s → 4s → 8s`), expanded Judge Telemetry HUD, and **Custom First-Visit Registers** (`Field : Answer` profiles, phonetic duplicate patient upsert, live search, `.xlsx`/`.csv` `FileProvider` export, FR-7.2 voice intake, and FR-7.6 follow-up baseline continuity).
+- **Web Product & Android APK Distribution Portal (`web/`)**:
+  - React 19 + TypeScript + Vite web portal with **Supabase Gmail & Email Sign-In (`/login`)**, interactive Walk-Mode preview, 12-item NHM danger-sign reference, 5-language APK installation guide, QR code & SHA-256 verification, and direct Android APK download (`web/public/downloads/asha-vaani-v0.3.0.apk`), ready for Vercel deployment (`web/vercel.json`).
 
 ---
 
@@ -73,13 +75,20 @@ uv run --project backend python scripts/run_judge_benchmark.py
 uv run --project backend python scripts/run_judge_benchmark.py --url http://127.0.0.1:8000
 ```
 
-### Native Android Build & JVM Tests (`29` unit tests)
+### Native Android Build & JVM Tests (`37` unit tests)
 ```bash
 cd android
 JAVA_HOME=/home/poornachandra-s/.jdks/temurin-21 ./gradlew :app:assembleDebug :app:testDebugUnitTest --no-daemon
 ```
 Output APK: `android/app/build/outputs/apk/debug/app-debug.apk`  
 Deploy to physical phone: `./scripts/deploy_android.sh` (or `./scripts/deploy_android.sh --build`).
+
+### Web Distribution Portal (`web/` · Vercel Ready)
+```bash
+cd web
+npm run check          # TypeScript + 30 Vitest tests + production Vite build into web/dist/
+npm run release:debug  # Publish latest ../android debug APK into web/public/downloads/ & web/public/release.json
+```
 
 ---
 

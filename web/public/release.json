@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "app": {
+    "name": "ASHA Vaani",
+    "packageName": "com.ashavaani.app",
+    "minSdk": 26,
+    "minAndroidVersion": "8.0"
+  },
+  "latest": {
+    "versionName": "0.3.0",
+    "versionCode": 2,
+    "releasedAt": "2026-11-21T23:26:19.000Z",
+    "file": "downloads/asha-vaani-v0.3.0.apk",
+    "sizeBytes": 18238397,
+    "sha256": "4ba990d5612e853644ad6e51700f66726499926e770cadaa6753c273e85b58b2",
+    "notes": [
+      "Supabase Gmail & Email Authentication (Login Screen + OAuth deep-link + Offline Field ASHA quick access)",
+      "Gnani Prisma v3.0 anti-buffering digital zero-PCM VAD flush & live in-place language switching",
+      "Loudspeaker outdoor gain (1.85x) with AcousticEchoGate & live LISTENING/CAPTURING indicators",
+      "Phonetic duplicate patient upsert (Savitha Rao == Savita Rao) & Room v2 FIFO offline outbox"
+    ]
+  },
+  "history": []
+}

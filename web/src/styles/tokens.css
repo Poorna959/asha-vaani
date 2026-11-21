@@ -1,0 +1,49 @@
+/* Design tokens mirrored from ../docs/UI_UX_Design_Phase_P2.md §2 (Outdoor Daylight High-Contrast). */
+:root {
+  --teal-900: #134e4a;
+  --teal-800: #115e59;
+  --teal-700: #0f766e; /* primary — Deep Clinical Teal */
+  --teal-600: #0d9488;
+  --teal-100: #ccfbf1;
+  --teal-50: #f0fdfa;
+  --teal-border: #99f6e4;
+
+  --ink: #0f172a; /* onSurface — 17.4:1 on white */
+  --ink-2: #334155;
+  --ink-muted: #64748b;
+  --canvas: #f8fafc;
+  --surface: #ffffff;
+  --border: #cbd5e1;
+  --border-soft: #e2e8f0;
+
+  --amber: #b45309; /* AA on white for text; #D97706 used for strokes */
+  --amber-stroke: #d97706;
+  --amber-fill: #fef3c7;
+  --crimson: #dc2626;
+  --crimson-ink: #b91c1c;
+  --crimson-fill: #fef2f2;
+  --crimson-border: #fca5a5;
+  --emerald: #047857;
+  --emerald-fill: #ecfdf5;
+  --emerald-border: #a7f3d0;
+
+  --font-sans: "Plus Jakarta Sans Variable", "Plus Jakarta Sans", system-ui, -apple-system, "Segoe UI", Roboto,
+    "Noto Sans", "Noto Sans Devanagari", "Noto Sans Kannada", "Noto Sans Tamil", "Noto Sans Telugu", sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace;
+
+  --radius-sm: 10px;
+  --radius: 16px;
+  --radius-lg: 26px;
+  --radius-pill: 999px;
+  --border-w: 1.5px;
+
+  --shadow-card: 0 1px 2px rgb(15 23 42 / 0.04), 0 8px 24px -12px rgb(15 23 42 / 0.12);
+  --shadow-float: 0 30px 60px -20px rgb(15 23 42 / 0.35);
+
+  --container: 1160px;
+  --gutter: clamp(1rem, 4vw, 2rem);
+  --section-y: clamp(4rem, 9vw, 7rem);
+  --header-h: 68px;
+
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
