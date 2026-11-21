@@ -25,6 +25,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -32,45 +35,62 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.ashavaani.app.AppContainer
 import com.ashavaani.app.model.ConnectionState
 import com.ashavaani.app.ui.components.StatusPill
 import com.ashavaani.app.ui.components.SunlitCard
 import com.ashavaani.app.ui.components.TelemetryStatusPill
 import com.ashavaani.app.ui.theme.AshaColors
+import com.ashavaani.app.ui.walkmode.SettingsSheet
+import com.ashavaani.app.ui.walkmode.WalkInputMode
+import com.ashavaani.app.ui.walkmode.WalkModeScreen
+import com.ashavaani.app.ui.walkmode.WalkModeViewModel
 
 /**
  * Root 4-tab application shell matching `docs/UI_UX_Design_Phase_P2.md`.
- * Individual tab screens will be plugged in during P2-04 (Walk Mode), P2-05 (Registers), and P2-06 (Follow-Ups & Visits).
+ * Hosts the live Walk-Mode Home Screen, Settings & Speech Telemetry Sheet, and Urgent PHC Referral Sheet;
+ * Registers (P2-05) and Follow-Ups / Visits (P2-06) plug directly into the remaining tabs.
  */
 @Composable
 fun AshaVaaniAppShell(
-    connectionState: ConnectionState = ConnectionState.OFFLINE_CACHE,
-    ttfaMs: Int? = null,
-    gnaniMode: String = "MOCK",
-    pendingFollowUpCount: Int = 0,
-    onOpenSettings: () -> Unit = {},
+    container: AppContainer,
 ) {
+    val walkModeViewModel: WalkModeViewModel = viewModel(
+        factory = WalkModeViewModel.factory(container),
+    )
+    val walkUiState by walkModeViewModel.uiState.collectAsStateWithLifecycle()
+    val pendingFollowUpCount by walkModeViewModel.openFollowUpCount.collectAsStateWithLifecycle()
+
+    var showSettingsSheet by remember { mutableStateOf(false) }
+
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route ?: AshaTab.WALK_MODE.route
-
     val currentTab = AshaTab.entries.firstOrNull { it.route == currentRoute } ?: AshaTab.WALK_MODE
+
+    val topSubtitle = if (currentTab == AshaTab.WALK_MODE && walkUiState.inputMode == WalkInputMode.REGISTER_INTAKE) {
+        "Voice Intake · FR-7.2"
+    } else {
+        currentTab.subtitle
+    }
 
     Scaffold(
         containerColor = AshaColors.SunlitCanvas,
         topBar = {
             AshaTopBar(
                 title = if (currentTab == AshaTab.WALK_MODE) "ASHA Vaani" else currentTab.label,
-                subtitle = currentTab.subtitle,
-                connectionState = connectionState,
-                ttfaMs = ttfaMs,
-                gnaniMode = gnaniMode,
-                onTelemetryClick = onOpenSettings,
+                subtitle = topSubtitle,
+                connectionState = walkUiState.connectionState,
+                ttfaMs = walkUiState.metrics.ttfaMs,
+                gnaniMode = walkUiState.gnaniMode,
+                onTelemetryClick = { showSettingsSheet = true },
             )
         },
         bottomBar = {
@@ -97,10 +117,19 @@ fun AshaVaaniAppShell(
                 .padding(innerPadding),
         ) {
             composable(AshaTab.WALK_MODE.route) {
-                TabScaffoldPlaceholder(
-                    tag = "P2-04 · WALK MODE",
-                    title = "Hands-Free Voice Register Ready",
-                    description = "Continuous 16kHz PCM voice capture with hardware AEC/NS/AGC, native Indic language pills, Amber FieldDiff voice corrections, and urgent Crimson PHC referral escalation.",
+                WalkModeScreen(
+                    uiState = walkUiState,
+                    hapticEvents = walkModeViewModel.hapticEvents,
+                    onMicClick = walkModeViewModel::onMicButtonPressed,
+                    onSelectLanguage = walkModeViewModel::selectLanguage,
+                    onResetDraft = walkModeViewModel::resetCurrentDraft,
+                    onClearFollowUpContext = walkModeViewModel::clearFollowUpContext,
+                    onExitRegisterIntake = walkModeViewModel::exitRegisterIntake,
+                    onToggleSimDrawer = walkModeViewModel::toggleSimDrawer,
+                    onSendSimulatedUtterance = walkModeViewModel::sendSimulatedUtterance,
+                    onDismissDanger = walkModeViewModel::dismissDangerEscalation,
+                    onClearToast = walkModeViewModel::clearToast,
+                    onClearError = walkModeViewModel::clearError,
                 )
             }
             composable(AshaTab.REGISTERS.route) {
@@ -125,6 +154,14 @@ fun AshaVaaniAppShell(
                 )
             }
         }
+    }
+
+    if (showSettingsSheet) {
+        SettingsSheet(
+            uiState = walkUiState,
+            onSaveAndReconnect = walkModeViewModel::saveSettingsAndReconnect,
+            onDismiss = { showSettingsSheet = false },
+        )
     }
 }
 
