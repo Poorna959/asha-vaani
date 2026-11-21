@@ -532,16 +532,22 @@ class VoiceSessionOrchestrator:
             llm_latency_ms = (time.perf_counter() - llm_start) * 1000.0
 
             # 2b. Secondary deterministic danger-sign check on LLM-normalized English notes
-            # (catches English clinical phrases that streaming STT wrote phonetically in Indic script)
+            # (catches English clinical phrases that streaming STT wrote phonetically in Indic script),
+            # while strictly ignoring any danger sign explicitly negated in the raw utterance (P3-08).
             turn_notes = str(turn_result.extraction.extracted_fields.get("notes") or "").strip()
             if turn_notes:
+                negated_in_raw = self.danger_detector.detect_negated_codes(event.text)
                 note_alerts = self.danger_detector.detect(
                     text=turn_notes,
                     language_code=active_lang,
                     visit_type=turn_result.updated_draft.visit_type or active_visit_type,
                 )
                 existing_codes = {a.code for a in danger_alerts}
-                new_note_alerts = [a for a in note_alerts if a.code not in existing_codes]
+                new_note_alerts = [
+                    a
+                    for a in note_alerts
+                    if a.code not in existing_codes and a.code not in negated_in_raw
+                ]
                 if new_note_alerts:
                     danger_alerts.extend(new_note_alerts)
                     for alert in new_note_alerts:

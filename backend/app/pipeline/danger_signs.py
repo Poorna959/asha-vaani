@@ -36,39 +36,68 @@ PRE_NEGATION_TOKENS = frozenset(
         "not",
         "without",
         "none",
+        "nil",
         "never",
+        "neither",
+        "nor",
+        "negative",
+        "zero",
+        "denies",
+        "denied",
         "nahi",
         "nahin",
         "na",
         "नहीं",
         "नही",
+        "नो",
         "illa",
         "ಇಲ್ಲ",
+        "ನೋ",
         "illai",
         "இல்லை",
+        "நோ",
         "ledu",
         "లేదు",
+        "నో",
     }
 )
 
 POST_NEGATION_TOKENS = frozenset(
     {
+        "no",
+        "not",
+        "none",
+        "nil",
+        "negative",
+        "denied",
         "nahi",
         "nahin",
         "नहीं",
         "नही",
+        "नो",
         "illa",
         "ಇಲ್ಲ",
+        "ನೋ",
         "illai",
         "இல்லை",
+        "நோ",
         "ledu",
         "లేదు",
+        "నో",
         "absent",
         "normal",
         "cleared",
         "resolved",
         "stopped",
+        "fine",
+        "okay",
     }
+)
+
+PRE_NEGATION_PHRASE_RE = re.compile(
+    r"(?<!\w)(?:no\s+(?:signs?|history|complaint|complaints|symptoms?)\s+of|"
+    r"free\s+(?:of|from)|ruled\s+out|checked\s+for|negative\s+for|without\s+any)(?!\w)",
+    re.IGNORECASE,
 )
 
 NEWBORN_CONTEXT_PATTERN = re.compile(
@@ -249,17 +278,33 @@ def resolve_short_language(
 
 def _is_negated_match(text: str, start: int, end: int) -> bool:
     """Check whether a positive-symptom match is immediately negated in context."""
-    # Split clause around sentence/comma boundaries so "no fever, bleeding present" doesn't
-    # mistakenly negate "bleeding".
+    # Split clause around sentence/comma/contrast boundaries so "no fever, bleeding present"
+    # or "no fever but bleeding present" doesn't mistakenly negate "bleeding".
     before = text[:start]
-    clause_before = re.split(r"[,.;!?\n।]|\b(?:but|lekin|par|magar|aadare|aanaal|kaani)\b", before, flags=re.IGNORECASE)[-1]
-    pre_tokens = [tok.lower() for tok in re.findall(r"[^\s,.;!?\n।]+", clause_before)[-3:]]
+    clause_before = re.split(
+        r"[,.;!?\n।]|\b(?:but|however|lekin|par|magar|aadare|aanaal|kaani)\b",
+        before,
+        flags=re.IGNORECASE,
+    )[-1]
+    if PRE_NEGATION_PHRASE_RE.search(clause_before):
+        return True
+    pre_tokens = [
+        tok.lower().strip(":-–—'\"")
+        for tok in re.findall(r"[^\s,.;!?\n।]+", clause_before)[-5:]
+    ]
     if any(tok in PRE_NEGATION_TOKENS for tok in pre_tokens):
         return True
 
     after = text[end:]
-    clause_after = re.split(r"[,.;!?\n।]|\b(?:but|lekin|par|magar|aadare|aanaal|kaani)\b", after, flags=re.IGNORECASE)[0]
-    post_tokens = [tok.lower() for tok in re.findall(r"[^\s,.;!?\n।]+", clause_after)[:3]]
+    clause_after = re.split(
+        r"[,.;!?\n।]|\b(?:but|however|lekin|par|magar|aadare|aanaal|kaani)\b",
+        after,
+        flags=re.IGNORECASE,
+    )[0]
+    post_tokens = [
+        tok.lower().strip(":-–—'\"")
+        for tok in re.findall(r"[^\s,.;!?\n।]+", clause_after)[:4]
+    ]
     if any(tok in POST_NEGATION_TOKENS for tok in post_tokens):
         return True
 
@@ -317,6 +362,49 @@ class DangerSignDetector:
             matched_keyword=matched_keyword,
         )
 
+    def _build_candidates(self, text: str) -> list[str]:
+        normalized = _normalize_text(text)
+        if not normalized:
+            return []
+        candidates: list[str] = [normalized]
+        if any(ord(ch) >= 128 for ch in normalized):
+            latin = transliterate_indic_to_latin(normalized)
+            if latin and latin.lower() != normalized.lower():
+                candidates.append(latin)
+        return candidates
+
+    def detect_negated_codes(self, text: str) -> set[str]:
+        """Return canonical danger-sign codes whose keywords appeared ONLY in negated form.
+
+        Used to prevent post-LLM secondary note scans from false-alarming on symptoms
+        that the ASHA worker explicitly negated in the raw utterance (e.g. 'no bleeding').
+        """
+        candidates = self._build_candidates(text)
+        if not candidates:
+            return set()
+
+        negated_only: set[str] = set()
+        for rule in self._rules:
+            if rule.code in NEGATIVE_STATE_CODES:
+                continue
+            saw_negated = False
+            saw_positive = False
+            for candidate in candidates:
+                for _, pattern in rule.patterns:
+                    for match in pattern.finditer(candidate):
+                        if _is_negated_match(candidate, match.start(), match.end()):
+                            saw_negated = True
+                        else:
+                            saw_positive = True
+                            break
+                    if saw_positive:
+                        break
+                if saw_positive:
+                    break
+            if saw_negated and not saw_positive:
+                negated_only.add(rule.code)
+        return negated_only
+
     def detect(
         self,
         text: str,
@@ -324,16 +412,11 @@ class DangerSignDetector:
         visit_type: Optional[VisitType] = None,
     ) -> list[DangerSignAlert]:
         """Scan utterance deterministically and return prioritized DangerSignAlert list."""
-        normalized = _normalize_text(text)
-        if not normalized:
+        candidates = self._build_candidates(text)
+        if not candidates:
             return []
-
+        normalized = candidates[0]
         short_lang = resolve_short_language(language_code, normalized)
-        candidates: list[str] = [normalized]
-        if any(ord(ch) >= 128 for ch in normalized):
-            latin = transliterate_indic_to_latin(normalized)
-            if latin and latin.lower() != normalized.lower():
-                candidates.append(latin)
 
         has_newborn_context = visit_type == "NEWBORN" or any(
             bool(NEWBORN_CONTEXT_PATTERN.search(c)) for c in candidates
@@ -344,16 +427,16 @@ class DangerSignDetector:
             found_rule = False
             for candidate in candidates:
                 for raw_kw, pattern in rule.patterns:
-                    match = pattern.search(candidate)
-                    if match is None:
-                        continue
-                    if rule.code not in NEGATIVE_STATE_CODES and _is_negated_match(
-                        candidate, match.start(), match.end()
-                    ):
-                        continue
-                    matched[rule.code] = self._to_alert(rule, short_lang, raw_kw)
-                    found_rule = True
-                    break
+                    for match in pattern.finditer(candidate):
+                        if rule.code not in NEGATIVE_STATE_CODES and _is_negated_match(
+                            candidate, match.start(), match.end()
+                        ):
+                            continue
+                        matched[rule.code] = self._to_alert(rule, short_lang, raw_kw)
+                        found_rule = True
+                        break
+                    if found_rule:
+                        break
                 if found_rule:
                     break
 

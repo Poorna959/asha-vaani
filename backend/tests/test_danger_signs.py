@@ -254,6 +254,13 @@ def test_stt_transliteration_and_phonetic_edge_cases(
         "ಸಿವಿಯರ್ ಹೆಡೆಕ್ ಇಲ್ಲ, ನಾರ್ಮಲ್ ಚೆಕಪ್",
         "No umbilical pus, baby feeding well and active",
         "Mild headache yesterday, feeling fine now",
+        # P3-08 live rehearsal negated cases (English + phonetic Indic + suffix negations)
+        "Sunita Devi ANC checkup, weight 54 kilo, no bleeding, no fever, no headache, IFA goli 30.",
+        "सुनीता देवी एएनसी चेकअप, नो ब्लीडिंग, नो हाई फीवर, वजन 54 किलो।",
+        "ಸುನಿತಾ ದೇವಿ ಎಎನ್ಸಿ ಚೆಕಪ್, ನೋ ಬ್ಲೀಡಿಂಗ್, ನೋ ಫೀವರ್, ತೂಕ 54 ಕಿಲೋ.",
+        "ANC checkup: bleeding none, high fever nil, severe headache absent.",
+        "No signs of bleeding or high fever or convulsions, routine ANC normal.",
+        "Checked for bleeding and umbilical pus, all negative.",
     ],
 )
 def test_edge_case_negations_and_normal_navel_do_not_false_trigger(
@@ -262,3 +269,20 @@ def test_edge_case_negations_and_normal_navel_do_not_false_trigger(
 ):
     alerts = detector.detect(safe_utterance, language_code="indic-auto")
     assert alerts == [], f"Unexpected false positive for '{safe_utterance}': {alerts}"
+
+
+def test_p308_contrast_clause_and_detect_negated_codes(detector: DangerSignDetector):
+    """Verify 'no fever, but heavy bleeding' still escalates bleeding and detects negated codes."""
+    alerts = detector.detect(
+        "No high fever, but heavy vaginal bleeding since morning",
+        language_code="en-IN",
+        visit_type="ANC",
+    )
+    assert [a.code for a in alerts] == ["DS_MAT_BLEEDING"]
+
+    negated = detector.detect_negated_codes(
+        "Sunita Devi ANC checkup, weight 54 kilo, no bleeding, no high fever, no severe headache, IFA goli 30."
+    )
+    assert "DS_MAT_BLEEDING" in negated
+    assert "DS_MAT_HIGH_FEVER" in negated
+    assert "DS_MAT_HEADACHE_VISION" in negated

@@ -578,3 +578,47 @@ def test_p301_granular_telemetry_and_fast_path_barge_in_cutoff():
             assert 0.0 <= metrics2["barge_in_cutoff_ms"] < 150.0
             assert metrics2["noise_floor_rms"] > 0.0
             assert metrics2["active_llm_model"] == "rule_based_slow_test"
+
+
+def test_p308_negated_english_never_false_triggers_via_llm_notes_rescan():
+    """Verify P3-08: Step 2b never false-triggers danger escalation for symptoms negated in raw speech."""
+    from app.pipeline.llm import GeminiExtractionPayload, LLMProvider
+
+    class SloppyNotesLLM(LLMProvider):
+        async def extract(self, *args, **kwargs) -> GeminiExtractionPayload:
+            return GeminiExtractionPayload(
+                intent="LOG_VISIT",
+                beneficiary_id="BEN-001",
+                beneficiary_name="Sunita Devi",
+                visit_type="ANC",
+                weight_kg=54.0,
+                ifa_tablets_given=30,
+                # Sloppy LLM drops "no" when summarizing notes!
+                notes="ANC checkup; bleeding, high fever, severe headache checked",
+                spoken_readback="Sunita Devi ANC checkup, weight 54 kg, 30 IFA tablets. Shall I save?",
+            )
+
+    cfg = Settings(mock_gnani=True, gemini_api_key="", groq_api_key="")
+    app = create_app(
+        settings=cfg,
+        db_path=":memory:",
+        stt_factory=lambda: MockPrismaSTTClient(partial_delay_s=0.0),
+        tts_factory=lambda: MockTimbreTTSClient(chunk_delay_s=0.0, max_chunks_per_sentence=2),
+        clinical_engine=ClinicalStateEngine(provider=SloppyNotesLLM()),
+    )
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/session") as ws:
+            ws.send_json({"type": "session_start", "language_code": "en-IN"})
+            ws.send_json(
+                {
+                    "type": "text_turn",
+                    "text": "Sunita Devi ANC checkup, weight 54 kilo, no bleeding, no high fever, no severe headache, IFA goli 30.",
+                }
+            )
+            events, _ = _receive_turn_packets(ws, min_pcm_chunks=1)
+            assert not any(e["type"] == "danger_escalation" for e in events)
+            form = next(e for e in events if e["type"] == "form_update")
+            assert form["status"] == "AWAITING_CONFIRMATION"
+            assert form["record"]["danger_signs"] == []
+            assert form["record"]["weight_kg"] == 54.0
