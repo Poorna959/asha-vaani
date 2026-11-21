@@ -24,6 +24,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -38,15 +39,21 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavGraph.Companion.findStartDestination
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
 import com.ashavaani.app.AppContainer
 import com.ashavaani.app.model.ConnectionState
 import com.ashavaani.app.ui.components.StatusPill
 import com.ashavaani.app.ui.components.SunlitCard
 import com.ashavaani.app.ui.components.TelemetryStatusPill
+import com.ashavaani.app.ui.registers.PatientProfileScreen
+import com.ashavaani.app.ui.registers.RegisterDetailScreen
+import com.ashavaani.app.ui.registers.RegistersScreen
+import com.ashavaani.app.ui.registers.RegistersViewModel
 import com.ashavaani.app.ui.theme.AshaColors
 import com.ashavaani.app.ui.walkmode.SettingsSheet
 import com.ashavaani.app.ui.walkmode.WalkInputMode
@@ -55,8 +62,8 @@ import com.ashavaani.app.ui.walkmode.WalkModeViewModel
 
 /**
  * Root 4-tab application shell matching `docs/UI_UX_Design_Phase_P2.md`.
- * Hosts the live Walk-Mode Home Screen, Settings & Speech Telemetry Sheet, and Urgent PHC Referral Sheet;
- * Registers (P2-05) and Follow-Ups / Visits (P2-06) plug directly into the remaining tabs.
+ * Wires Walk Mode (P2-04) and Custom Registers FR-7.1–FR-7.6 (P2-05),
+ * with Follow-Ups and Visits plugging in during P2-06.
  */
 @Composable
 fun AshaVaaniAppShell(
@@ -65,27 +72,67 @@ fun AshaVaaniAppShell(
     val walkModeViewModel: WalkModeViewModel = viewModel(
         factory = WalkModeViewModel.factory(container),
     )
+    val registersViewModel: RegistersViewModel = viewModel(
+        factory = RegistersViewModel.factory(container),
+    )
+
     val walkUiState by walkModeViewModel.uiState.collectAsStateWithLifecycle()
     val pendingFollowUpCount by walkModeViewModel.openFollowUpCount.collectAsStateWithLifecycle()
+
+    val registers by registersViewModel.registers.collectAsStateWithLifecycle()
+    val patientCounts by registersViewModel.patientCounts.collectAsStateWithLifecycle()
+    val patientsInRegister by registersViewModel.patientsInSelectedRegister.collectAsStateWithLifecycle()
+    val registerSearchQuery by registersViewModel.searchQuery.collectAsStateWithLifecycle()
+    val selectedProfile by registersViewModel.selectedProfile.collectAsStateWithLifecycle()
+    val registerBusy by registersViewModel.isBusy.collectAsStateWithLifecycle()
+    val registerToast by registersViewModel.statusToast.collectAsStateWithLifecycle()
+    val registerError by registersViewModel.errorBanner.collectAsStateWithLifecycle()
 
     var showSettingsSheet by remember { mutableStateOf(false) }
 
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route ?: AshaTab.WALK_MODE.route
-    val currentTab = AshaTab.entries.firstOrNull { it.route == currentRoute } ?: AshaTab.WALK_MODE
 
-    val topSubtitle = if (currentTab == AshaTab.WALK_MODE && walkUiState.inputMode == WalkInputMode.REGISTER_INTAKE) {
-        "Voice Intake · FR-7.2"
-    } else {
-        currentTab.subtitle
+    val activeTab = when {
+        currentRoute.startsWith("register_detail") || currentRoute.startsWith("patient_profile") -> AshaTab.REGISTERS
+        else -> AshaTab.entries.firstOrNull { it.route == currentRoute } ?: AshaTab.WALK_MODE
+    }
+
+    val (topTitle, topSubtitle) = when {
+        currentRoute == AshaTab.WALK_MODE.route -> {
+            "ASHA Vaani" to if (walkUiState.inputMode == WalkInputMode.REGISTER_INTAKE) {
+                "Voice Intake · FR-7.2"
+            } else {
+                "Walk Mode · Hands-Free"
+            }
+        }
+        currentRoute.startsWith("register_detail") -> {
+            val regId = backStackEntry?.arguments?.getString("registerId")
+            val reg = registers.firstOrNull { it.id == regId }
+            (reg?.name ?: "Register Detail") to "${patientsInRegister.size} patients · ${reg?.fields?.size ?: 0} fields"
+        }
+        currentRoute.startsWith("patient_profile") -> {
+            (selectedProfile?.patientName ?: "Patient Profile") to "Field : Answer Profile"
+        }
+        else -> activeTab.label to activeTab.subtitle
+    }
+
+    fun navigateToWalkMode() {
+        navController.navigate(AshaTab.WALK_MODE.route) {
+            popUpTo(navController.graph.findStartDestination().id) {
+                saveState = true
+            }
+            launchSingleTop = true
+            restoreState = true
+        }
     }
 
     Scaffold(
         containerColor = AshaColors.SunlitCanvas,
         topBar = {
             AshaTopBar(
-                title = if (currentTab == AshaTab.WALK_MODE) "ASHA Vaani" else currentTab.label,
+                title = topTitle,
                 subtitle = topSubtitle,
                 connectionState = walkUiState.connectionState,
                 ttfaMs = walkUiState.metrics.ttfaMs,
@@ -95,7 +142,7 @@ fun AshaVaaniAppShell(
         },
         bottomBar = {
             AshaBottomNavBar(
-                currentRoute = currentRoute,
+                activeTab = activeTab,
                 pendingFollowUpCount = pendingFollowUpCount,
                 onSelectTab = { tab ->
                     navController.navigate(tab.route) {
@@ -132,13 +179,98 @@ fun AshaVaaniAppShell(
                     onClearError = walkModeViewModel::clearError,
                 )
             }
+
             composable(AshaTab.REGISTERS.route) {
-                TabScaffoldPlaceholder(
-                    tag = "P2-05 · CUSTOM REGISTERS",
-                    title = "Custom First-Visit Registers (FR-7)",
-                    description = "Create custom named registers, search patients by name, add patients by voice (FR-7.2), inspect clean mobile Field : Answer profiles (zero Excel grids), and export .xlsx/.csv via FileProvider.",
+                RegistersScreen(
+                    registers = registers,
+                    patientCounts = patientCounts,
+                    statusToast = registerToast,
+                    errorBanner = registerError,
+                    onRefresh = registersViewModel::refreshAll,
+                    onOpenRegister = { reg ->
+                        registersViewModel.openRegister(reg.id)
+                        navController.navigate(AshaSubRoutes.registerDetail(reg.id))
+                    },
+                    onCreateRegister = { name, desc, fields ->
+                        registersViewModel.createRegister(name, desc, fields)
+                    },
+                    onClearToast = registersViewModel::clearToast,
+                    onClearError = registersViewModel::clearError,
                 )
             }
+
+            composable(
+                route = AshaSubRoutes.REGISTER_DETAIL,
+                arguments = listOf(navArgument("registerId") { type = NavType.StringType }),
+            ) { entry ->
+                val registerId = entry.arguments?.getString("registerId").orEmpty()
+                val register = registers.firstOrNull { it.id == registerId }
+
+                LaunchedEffect(registerId) {
+                    if (registerId.isNotBlank()) {
+                        registersViewModel.openRegister(registerId)
+                    }
+                }
+
+                RegisterDetailScreen(
+                    register = register,
+                    patients = patientsInRegister,
+                    searchQuery = registerSearchQuery,
+                    isBusy = registerBusy,
+                    errorBanner = registerError,
+                    onBack = { navController.popBackStack() },
+                    onSearchChange = registersViewModel::updateSearchQuery,
+                    onOpenPatient = { patient ->
+                        registersViewModel.loadPatientProfile(patient.id)
+                        navController.navigate(AshaSubRoutes.patientProfile(registerId, patient.id))
+                    },
+                    onAddPatientByVoice = { reg ->
+                        walkModeViewModel.startRegisterVoiceIntake(
+                            registerId = reg.id,
+                            registerName = reg.name,
+                            expectedFields = reg.fields.sortedBy { it.orderIndex }.map { it.fieldName },
+                        )
+                        navigateToWalkMode()
+                    },
+                    onAddManualPatient = { regId, name, category, answers ->
+                        registersViewModel.addManualPatient(regId, name, category, answers)
+                    },
+                    onExportRegister = { regId, format, exportsDir, onReady ->
+                        registersViewModel.exportRegister(regId, format, exportsDir, onReady)
+                    },
+                    onClearError = registersViewModel::clearError,
+                )
+            }
+
+            composable(
+                route = AshaSubRoutes.PATIENT_PROFILE,
+                arguments = listOf(
+                    navArgument("registerId") { type = NavType.StringType },
+                    navArgument("patientId") { type = NavType.StringType },
+                ),
+            ) { entry ->
+                val patientId = entry.arguments?.getString("patientId").orEmpty()
+
+                LaunchedEffect(patientId) {
+                    if (patientId.isNotBlank()) {
+                        registersViewModel.loadPatientProfile(patientId)
+                    }
+                }
+
+                PatientProfileScreen(
+                    profile = selectedProfile?.takeIf { it.patientId == patientId } ?: selectedProfile,
+                    isBusy = registerBusy,
+                    onBack = { navController.popBackStack() },
+                    onStartFollowUpVisit = { pid ->
+                        walkModeViewModel.startPatientFollowUp(pid)
+                        navigateToWalkMode()
+                    },
+                    onUpdatePatient = { pid, name, category, answers ->
+                        registersViewModel.updatePatientFields(pid, name, category, answers)
+                    },
+                )
+            }
+
             composable(AshaTab.FOLLOW_UPS.route) {
                 TabScaffoldPlaceholder(
                     tag = "P2-06 · FOLLOW-UP QUEUE",
@@ -146,6 +278,7 @@ fun AshaVaaniAppShell(
                     description = "Automatically populated when visits are confirmed or flagged for urgent PHC referral. Supports 1-tap Mark Done and Start Visit.",
                 )
             }
+
             composable(AshaTab.VISITS.route) {
                 TabScaffoldPlaceholder(
                     tag = "P2-06 · SAVED VISITS",
@@ -235,7 +368,7 @@ private fun AshaTopBar(
 
 @Composable
 private fun AshaBottomNavBar(
-    currentRoute: String,
+    activeTab: AshaTab,
     pendingFollowUpCount: Int,
     onSelectTab: (AshaTab) -> Unit,
 ) {
@@ -246,7 +379,7 @@ private fun AshaBottomNavBar(
             tonalElevation = 0.dp,
         ) {
             AshaTab.entries.forEach { tab ->
-                val selected = currentRoute == tab.route
+                val selected = activeTab == tab
                 NavigationBarItem(
                     selected = selected,
                     onClick = { onSelectTab(tab) },
