@@ -339,8 +339,14 @@ class WsMetricsEvent(BaseModel):
     type: Literal["metrics"] = "metrics"
     ttfa_ms: float
     asr_latency_ms: float = 0.0
+    stt_latency_ms: float = 0.0
     llm_latency_ms: float = 0.0
     tts_latency_ms: float = 0.0
+    tts_ttfa_ms: float = 0.0
+    barge_in_cutoff_ms: Optional[float] = None
+    noise_floor_rms: float = 0.0
+    active_llm_model: str = ""
+    danger_fast_path: bool = False
 
 
 class WsErrorEvent(BaseModel):

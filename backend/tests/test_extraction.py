@@ -402,3 +402,133 @@ async def test_groq_register_intake_engine_and_provider_factory():
     offline_cfg = Settings(llm_provider="groq", groq_api_key="", gemini_api_key="")
     assert resolve_active_llm_info(offline_cfg)[0] == "offline_fallback"
     assert isinstance(create_visit_extractor(offline_cfg), RuleBasedVisitExtractor)
+
+
+async def test_p301_groq_register_intake_failover_on_429_and_503():
+    """Verify P3-01: RegisterIntakeEngine fails over from qwen3.8-27b to openai/gpt-oss-20b on 429/503."""
+    register = CustomRegister(
+        id="REG-2",
+        name="Newborn Baseline",
+        fields=[
+            RegisterField(id="F-1", register_id="REG-2", field_name="Age", field_type="NUMBER"),
+            RegisterField(id="F-2", register_id="REG-2", field_name="Blood Group", field_type="TEXT"),
+        ],
+    )
+    draft = RegisterIntakeDraft(
+        register_id="REG-2",
+        register_name="Newborn Baseline",
+        expected_fields=["Age", "Blood Group"],
+    )
+
+    for error_status in (429, 503):
+        called_models: list[str] = []
+
+        def handler(request: httpx.Request, status_code: int = error_status) -> httpx.Response:
+            payload = json.loads(request.content.decode("utf-8"))
+            called_models.append(payload["model"])
+            if len(called_models) == 1:
+                return httpx.Response(status_code, json={"error": {"message": "Rate limited / busy"}})
+            assert payload["model"] == "openai/gpt-oss-20b"
+            assert payload.get("reasoning_effort") == "low"
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "intent": "LOG_VISIT",
+                                        "patient_name": "Radha Bai",
+                                        "category": "NEWBORN",
+                                        "answers": [
+                                            {"field_name": "Age", "value": "27"},
+                                            {"field_name": "Blood Group", "value": "B+"},
+                                        ],
+                                        "spoken_readback": "Radha Bai, Age 27, Blood Group B+ recorded. Save?",
+                                    }
+                                )
+                            }
+                        }
+                    ]
+                },
+            )
+
+        async with httpx.AsyncClient(
+            base_url="https://api.groq.com/openai/v1",
+            transport=httpx.MockTransport(handler),
+        ) as client:
+            intake_engine = RegisterIntakeEngine(
+                llm_provider="groq",
+                groq_api_key="gsk_test_key",
+                groq_model="qwen/qwen3.8-27b",
+                http_client=client,
+            )
+            turn = await intake_engine.process_turn(
+                utterance="Radha Bai, age 27, blood group B positive",
+                register=register,
+                current_draft=draft,
+                language_code="en-IN",
+            )
+
+        assert called_models == ["qwen/qwen3.8-27b", "openai/gpt-oss-20b"]
+        assert intake_engine.last_used_model == "openai/gpt-oss-20b"
+        assert turn.updated_draft.patient_name == "Radha Bai"
+        assert turn.updated_draft.field_answers == {"Age": 27, "Blood Group": "B+"}
+        assert turn.status == "AWAITING_CONFIRMATION"
+
+
+async def test_p301_groq_visit_extractor_failover_tracks_last_used_model():
+    """Verify P3-01: GroqVisitExtractor updates last_used_model when failing over on HTTP 429."""
+    called_models: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content.decode("utf-8"))
+        called_models.append(payload["model"])
+        if len(called_models) == 1:
+            return httpx.Response(429, json={"error": {"message": "Too many requests"}})
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "intent": "LOG_VISIT",
+                                    "beneficiary_id": "BEN-001",
+                                    "beneficiary_name": "Sunita Devi",
+                                    "visit_type": "ANC",
+                                    "weight_kg": 54.0,
+                                    "vaccinations_due": ["TT2"],
+                                    "next_visit_date": None,
+                                    "ifa_tablets_given": 30,
+                                    "notes": "ANC checkup",
+                                    "spoken_readback": "Sunita Devi ANC checkup recorded. Save?",
+                                }
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    async with httpx.AsyncClient(
+        base_url="https://api.groq.com/openai/v1",
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        extractor = GroqVisitExtractor(
+            api_key="gsk_test_key",
+            model="qwen/qwen3.8-27b",
+            http_client=client,
+        )
+        result = await extractor.extract(
+            utterance="Sunita Devi ANC checkup weight 54 kilo IFA 30 TT2 due",
+            current_draft=VisitDraft(),
+            language_code="en-IN",
+        )
+
+    assert called_models == ["qwen/qwen3.8-27b", "openai/gpt-oss-20b"]
+    assert extractor.last_used_model == "openai/gpt-oss-20b"
+    assert result.beneficiary_name == "Sunita Devi"
+    assert result.weight_kg == 54.0

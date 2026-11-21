@@ -42,7 +42,7 @@ from app.pipeline.gnani_stt import (
     create_stt_client,
 )
 from app.pipeline.gnani_tts import BaseTTSClient, create_tts_client
-from app.pipeline.llm import ClinicalStateEngine, RegisterIntakeEngine
+from app.pipeline.llm import ClinicalStateEngine, RegisterIntakeEngine, resolve_active_llm_info
 from app.pipeline.vad import AdaptiveEndpointVAD, VadEvent
 from app.services.followup import build_follow_up_create
 from app.services.register_service import (
@@ -110,6 +110,7 @@ class VoiceSessionOrchestrator:
         self._response_task: Optional[asyncio.Task[None]] = None
         self._is_speaking: bool = False
         self._speech_end_ts: Optional[float] = None
+        self._last_barge_in_cutoff_ms: Optional[float] = None
         self._closed: bool = False
 
     # ------------------------------------------------------------------
@@ -136,6 +137,7 @@ class VoiceSessionOrchestrator:
 
     async def trigger_barge_in(self) -> bool:
         """Immediately cancel any in-flight LLM/TTS response and flush client audio."""
+        cancel_start = time.perf_counter()
         was_active = self._is_speaking or (
             self._response_task is not None and not self._response_task.done()
         )
@@ -152,9 +154,23 @@ class VoiceSessionOrchestrator:
 
         if was_active:
             self.status = "LISTENING"
+            self._last_barge_in_cutoff_ms = round((time.perf_counter() - cancel_start) * 1000.0, 2)
             await self._send_json(WsBargeInClearEvent().model_dump())
             return True
         return False
+
+    def _resolve_active_llm_model(self, is_register_mode: bool = False) -> str:
+        """Return the active/most-recently-used LLM model name for Judge Telemetry HUD."""
+        if is_register_mode:
+            used = getattr(self.register_intake_engine, "last_used_model", "")
+            if used:
+                return str(used)
+        else:
+            used = getattr(self.clinical_engine.provider, "last_used_model", "")
+            if used:
+                return str(used)
+        _, configured_model = resolve_active_llm_info(self.settings)
+        return configured_model
 
     # ------------------------------------------------------------------
     # Patient Baseline Pre-Selection (FR-7.6)
@@ -238,6 +254,8 @@ class VoiceSessionOrchestrator:
         turn_start: float,
         asr_latency_ms: float,
         llm_latency_ms: float,
+        active_llm_model: str = "",
+        danger_fast_path: bool = False,
     ) -> None:
         """Stream synthesized 16kHz PCM audio via Gnani Timbre v3.0 (cancellable on barge-in)."""
         if not safe_reply:
@@ -257,12 +275,20 @@ class VoiceSessionOrchestrator:
                     now = time.perf_counter()
                     ttfa_ms = (now - turn_start) * 1000.0
                     tts_first_ms = (now - tts_start) * 1000.0
+                    asr_rounded = round(asr_latency_ms, 1)
+                    tts_rounded = round(tts_first_ms, 1)
                     await self._send_json(
                         WsMetricsEvent(
                             ttfa_ms=round(ttfa_ms, 1),
-                            asr_latency_ms=round(asr_latency_ms, 1),
+                            asr_latency_ms=asr_rounded,
+                            stt_latency_ms=asr_rounded,
                             llm_latency_ms=round(llm_latency_ms, 1),
-                            tts_latency_ms=round(tts_first_ms, 1),
+                            tts_latency_ms=tts_rounded,
+                            tts_ttfa_ms=tts_rounded,
+                            barge_in_cutoff_ms=self._last_barge_in_cutoff_ms,
+                            noise_floor_rms=self.vad.noise_floor_rms,
+                            active_llm_model=active_llm_model,
+                            danger_fast_path=danger_fast_path,
                         ).model_dump()
                     )
                 await self._send_bytes(pcm_chunk)
@@ -289,9 +315,10 @@ class VoiceSessionOrchestrator:
             else (event.language or "indic-auto")
         )
 
+        is_register_mode = self.active_register is not None and self.register_draft is not None
         active_visit_type = (
             self.register_draft.category
-            if self.active_register is not None and self.register_draft is not None
+            if is_register_mode and self.register_draft is not None
             else self.draft.visit_type
         )
 
@@ -301,6 +328,7 @@ class VoiceSessionOrchestrator:
             language_code=active_lang,
             visit_type=active_visit_type,
         )
+        fast_tts_task: Optional[asyncio.Task[None]] = None
         if danger_alerts:
             for alert in danger_alerts:
                 if alert.code not in self.draft.danger_signs:
@@ -315,211 +343,252 @@ class VoiceSessionOrchestrator:
                     all_alerts=danger_alerts,
                 ).model_dump()
             )
+            # P3-01 Parallel Danger-Sign TTS Fast-Path:
+            # Begin streaming the FR-6 template-locked localized PHC referral audio immediately
+            # in parallel with background LLM structured extraction (< 450ms TTFA).
+            fast_compliance = self.compliance_guardrail.enforce(
+                proposed_reply="",
+                language_code=active_lang,
+                user_utterance=event.text,
+                danger_alerts=danger_alerts,
+            )
+            if fast_compliance.safe_text:
+                self.status = "ESCALATED"
+                fast_tts_task = asyncio.create_task(
+                    self._stream_tts_reply(
+                        safe_reply=fast_compliance.safe_text,
+                        active_lang=active_lang,
+                        effective_status="ESCALATED",
+                        turn_start=turn_start,
+                        asr_latency_ms=event.latency_ms,
+                        llm_latency_ms=0.0,
+                        active_llm_model=self._resolve_active_llm_model(is_register_mode=is_register_mode),
+                        danger_fast_path=True,
+                    )
+                )
 
-        # Branch A: FR-7.2 Custom Register Voice Intake Mode
-        if self.active_register is not None and self.register_draft is not None:
+        try:
+            # Branch A: FR-7.2 Custom Register Voice Intake Mode
+            if is_register_mode and self.active_register is not None and self.register_draft is not None:
+                llm_start = time.perf_counter()
+                intake_result = await self.register_intake_engine.process_turn(
+                    utterance=event.text,
+                    register=self.active_register,
+                    current_draft=self.register_draft,
+                    language_code=active_lang,
+                    readback_completed=self.readback_completed,
+                )
+                llm_latency_ms = (time.perf_counter() - llm_start) * 1000.0
+
+                self.register_draft = intake_result.updated_draft
+                self.readback_completed = intake_result.readback_completed or bool(danger_alerts)
+
+                compliance = self.compliance_guardrail.enforce(
+                    proposed_reply=intake_result.spoken_readback,
+                    language_code=active_lang,
+                    user_utterance=event.text,
+                    danger_alerts=danger_alerts,
+                )
+                safe_reply = compliance.safe_text
+                effective_status: SessionStatus = intake_result.status
+                if danger_alerts and not intake_result.should_save:
+                    effective_status = "ESCALATED"
+                self.status = effective_status
+
+                if intake_result.should_save and self.register_draft.patient_name:
+                    saved_patient = await self.register_service.add_patient(
+                        PatientRecordCreate(
+                            register_id=self.active_register.id,
+                            patient_name=self.register_draft.patient_name,
+                            category=self.register_draft.category,
+                            field_answers=dict(self.register_draft.field_answers),
+                        )
+                    )
+                    profile_view = await self.register_service.get_patient_profile_view(saved_patient.id)
+                    # Refresh register schema in case new fields were auto-synced
+                    self.active_register = await self.register_service.get_register(self.active_register.id)
+                    await self._send_json(
+                        WsPatientSavedEvent(patient=saved_patient, profile=profile_view).model_dump()
+                    )
+                    await self._send_json(
+                        WsRegisterIntakeUpdateEvent(
+                            status="SAVED",
+                            draft=self.register_draft,
+                            spoken_reply=safe_reply,
+                        ).model_dump()
+                    )
+                    # Reset intake draft for the next patient in this register
+                    self.register_draft = RegisterIntakeDraft(
+                        register_id=self.active_register.id,
+                        register_name=self.active_register.name,
+                        category=self._infer_register_category(self.active_register.name),
+                        expected_fields=[f.field_name for f in self.active_register.fields],
+                    )
+                    self.readback_completed = False
+                    self._turn_transcripts.clear()
+                else:
+                    diffs = intake_result.field_diffs
+                    await self._send_json(
+                        WsRegisterIntakeUpdateEvent(
+                            status=effective_status,
+                            draft=self.register_draft,
+                            field_diff=diffs[0] if diffs else None,
+                            field_diffs=diffs,
+                            spoken_reply=safe_reply,
+                        ).model_dump()
+                    )
+
+                if fast_tts_task is not None:
+                    await fast_tts_task
+                else:
+                    await self._stream_tts_reply(
+                        safe_reply=safe_reply,
+                        active_lang=active_lang,
+                        effective_status=effective_status,
+                        turn_start=turn_start,
+                        asr_latency_ms=event.latency_ms,
+                        llm_latency_ms=llm_latency_ms,
+                        active_llm_model=self._resolve_active_llm_model(is_register_mode=True),
+                        danger_fast_path=False,
+                    )
+                return
+
+            # Branch B: Standard Routine Home-Visit Voice Mode (ANC / NEWBORN / IMMUNISATION)
+            # 2. Clinical Structured Extraction & Read-Back State Machine
             llm_start = time.perf_counter()
-            intake_result = await self.register_intake_engine.process_turn(
+            patients = await self.db.list_patients()
+            roster_dicts = [p.model_dump() for p in patients]
+
+            turn_result = await self.clinical_engine.process_turn(
                 utterance=event.text,
-                register=self.active_register,
-                current_draft=self.register_draft,
+                current_draft=self.draft,
                 language_code=active_lang,
                 readback_completed=self.readback_completed,
+                patient_context=self.patient_context,
+                roster=roster_dicts,
             )
             llm_latency_ms = (time.perf_counter() - llm_start) * 1000.0
 
-            self.register_draft = intake_result.updated_draft
-            self.readback_completed = intake_result.readback_completed or bool(danger_alerts)
+            # 2b. Secondary deterministic danger-sign check on LLM-normalized English notes
+            # (catches English clinical phrases that streaming STT wrote phonetically in Indic script)
+            turn_notes = str(turn_result.extraction.extracted_fields.get("notes") or "").strip()
+            if turn_notes:
+                note_alerts = self.danger_detector.detect(
+                    text=turn_notes,
+                    language_code=active_lang,
+                    visit_type=turn_result.updated_draft.visit_type or active_visit_type,
+                )
+                existing_codes = {a.code for a in danger_alerts}
+                new_note_alerts = [a for a in note_alerts if a.code not in existing_codes]
+                if new_note_alerts:
+                    danger_alerts.extend(new_note_alerts)
+                    for alert in new_note_alerts:
+                        if alert.code not in self.draft.danger_signs:
+                            self.draft.danger_signs.append(alert.code)
+                    primary = danger_alerts[0]
+                    await self._send_json(
+                        WsDangerEscalationEvent(
+                            code=primary.code,
+                            name=primary.canonical_name,
+                            priority=primary.priority,
+                            localized_instruction=primary.localized_instruction,
+                            all_alerts=danger_alerts,
+                        ).model_dump()
+                    )
 
+            # Preserve deterministically detected danger signs onto updated draft
+            for code in self.draft.danger_signs:
+                if code not in turn_result.updated_draft.danger_signs:
+                    turn_result.updated_draft.danger_signs.append(code)
+
+            self.draft = turn_result.updated_draft
+            self.readback_completed = turn_result.readback_completed or bool(danger_alerts)
+
+            # 3. FR-6 Pre-TTS Compliance Firewall (Zero Diagnosis / Zero Medicine Advice)
             compliance = self.compliance_guardrail.enforce(
-                proposed_reply=intake_result.spoken_readback,
+                proposed_reply=turn_result.extraction.spoken_readback,
                 language_code=active_lang,
                 user_utterance=event.text,
                 danger_alerts=danger_alerts,
             )
             safe_reply = compliance.safe_text
-            effective_status: SessionStatus = intake_result.status
-            if danger_alerts and not intake_result.should_save:
+
+            effective_status = turn_result.status
+            if danger_alerts and not turn_result.should_save:
                 effective_status = "ESCALATED"
             self.status = effective_status
 
-            if intake_result.should_save and self.register_draft.patient_name:
-                saved_patient = await self.register_service.add_patient(
-                    PatientRecordCreate(
-                        register_id=self.active_register.id,
-                        patient_name=self.register_draft.patient_name,
-                        category=self.register_draft.category,
-                        field_answers=dict(self.register_draft.field_answers),
-                    )
+            # 4. Commit to SQLite & Auto-Schedule Follow-Up ONLY on Confirmed Save
+            if turn_result.should_save:
+                visit_payload = VisitRecordCreate(
+                    beneficiary_id=self.draft.beneficiary_id or "BEN-WALKIN",
+                    beneficiary_name=self.draft.beneficiary_name or "Unknown Beneficiary",
+                    visit_type=self.draft.visit_type or "ANC",
+                    weight_kg=self.draft.weight_kg,
+                    vaccinations_due=list(self.draft.vaccinations_due),
+                    next_visit_date=self.draft.next_visit_date,
+                    ifa_tablets_given=self.draft.ifa_tablets_given,
+                    has_danger_sign=bool(self.draft.danger_signs),
+                    danger_signs=list(self.draft.danger_signs),
+                    notes=self.draft.notes,
+                    raw_transcript=" | ".join(self._turn_transcripts),
+                    language_code=active_lang if active_lang in (
+                        "hi-IN", "kn-IN", "ta-IN", "te-IN", "en-IN", "indic-auto"
+                    ) else "hi-IN",
                 )
-                profile_view = await self.register_service.get_patient_profile_view(saved_patient.id)
-                # Refresh register schema in case new fields were auto-synced
-                self.active_register = await self.register_service.get_register(self.active_register.id)
-                await self._send_json(
-                    WsPatientSavedEvent(patient=saved_patient, profile=profile_view).model_dump()
+                saved_visit = await self.db.create_visit(visit_payload)
+                baseline_fields = (self.patient_context or {}).get("baseline_fields")
+                saved_follow_up = await self.db.create_follow_up(
+                    build_follow_up_create(saved_visit, baseline_fields=baseline_fields)
                 )
                 await self._send_json(
-                    WsRegisterIntakeUpdateEvent(
+                    WsVisitSavedEvent(visit=saved_visit, follow_up=saved_follow_up).model_dump()
+                )
+                # Emit final SAVED form state before clearing draft + baseline context for next house
+                await self._send_json(
+                    WsFormUpdateEvent(
                         status="SAVED",
-                        draft=self.register_draft,
+                        record=self.draft,
                         spoken_reply=safe_reply,
                     ).model_dump()
                 )
-                # Reset intake draft for the next patient in this register
-                self.register_draft = RegisterIntakeDraft(
-                    register_id=self.active_register.id,
-                    register_name=self.active_register.name,
-                    category=self._infer_register_category(self.active_register.name),
-                    expected_fields=[f.field_name for f in self.active_register.fields],
-                )
+                self.draft = VisitDraft()
+                self.patient_context = None
                 self.readback_completed = False
                 self._turn_transcripts.clear()
             else:
-                diffs = intake_result.field_diffs
+                diffs = turn_result.extraction.field_diffs
                 await self._send_json(
-                    WsRegisterIntakeUpdateEvent(
+                    WsFormUpdateEvent(
                         status=effective_status,
-                        draft=self.register_draft,
+                        record=self.draft,
                         field_diff=diffs[0] if diffs else None,
                         field_diffs=diffs,
                         spoken_reply=safe_reply,
                     ).model_dump()
                 )
 
-            await self._stream_tts_reply(
-                safe_reply=safe_reply,
-                active_lang=active_lang,
-                effective_status=effective_status,
-                turn_start=turn_start,
-                asr_latency_ms=event.latency_ms,
-                llm_latency_ms=llm_latency_ms,
-            )
-            return
-
-        # Branch B: Standard Routine Home-Visit Voice Mode (ANC / NEWBORN / IMMUNISATION)
-        # 2. Clinical Structured Extraction & Read-Back State Machine
-        llm_start = time.perf_counter()
-        patients = await self.db.list_patients()
-        roster_dicts = [p.model_dump() for p in patients]
-
-        turn_result = await self.clinical_engine.process_turn(
-            utterance=event.text,
-            current_draft=self.draft,
-            language_code=active_lang,
-            readback_completed=self.readback_completed,
-            patient_context=self.patient_context,
-            roster=roster_dicts,
-        )
-        llm_latency_ms = (time.perf_counter() - llm_start) * 1000.0
-
-        # 2b. Secondary deterministic danger-sign check on LLM-normalized English notes
-        # (catches English clinical phrases that streaming STT wrote phonetically in Indic script)
-        turn_notes = str(turn_result.extraction.extracted_fields.get("notes") or "").strip()
-        if turn_notes:
-            note_alerts = self.danger_detector.detect(
-                text=turn_notes,
-                language_code=active_lang,
-                visit_type=turn_result.updated_draft.visit_type or active_visit_type,
-            )
-            existing_codes = {a.code for a in danger_alerts}
-            new_note_alerts = [a for a in note_alerts if a.code not in existing_codes]
-            if new_note_alerts:
-                danger_alerts.extend(new_note_alerts)
-                for alert in new_note_alerts:
-                    if alert.code not in self.draft.danger_signs:
-                        self.draft.danger_signs.append(alert.code)
-                primary = danger_alerts[0]
-                await self._send_json(
-                    WsDangerEscalationEvent(
-                        code=primary.code,
-                        name=primary.canonical_name,
-                        priority=primary.priority,
-                        localized_instruction=primary.localized_instruction,
-                        all_alerts=danger_alerts,
-                    ).model_dump()
+            # 5. Stream Synthesized 16kHz PCM Audio via Gnani Timbre v3.0 (Cancellable on Barge-In)
+            if fast_tts_task is not None:
+                await fast_tts_task
+            else:
+                await self._stream_tts_reply(
+                    safe_reply=safe_reply,
+                    active_lang=active_lang,
+                    effective_status=effective_status,
+                    turn_start=turn_start,
+                    asr_latency_ms=event.latency_ms,
+                    llm_latency_ms=llm_latency_ms,
+                    active_llm_model=self._resolve_active_llm_model(is_register_mode=False),
+                    danger_fast_path=False,
                 )
-
-        # Preserve deterministically detected danger signs onto updated draft
-        for code in self.draft.danger_signs:
-            if code not in turn_result.updated_draft.danger_signs:
-                turn_result.updated_draft.danger_signs.append(code)
-
-        self.draft = turn_result.updated_draft
-        self.readback_completed = turn_result.readback_completed or bool(danger_alerts)
-
-        # 3. FR-6 Pre-TTS Compliance Firewall (Zero Diagnosis / Zero Medicine Advice)
-        compliance = self.compliance_guardrail.enforce(
-            proposed_reply=turn_result.extraction.spoken_readback,
-            language_code=active_lang,
-            user_utterance=event.text,
-            danger_alerts=danger_alerts,
-        )
-        safe_reply = compliance.safe_text
-
-        effective_status = turn_result.status
-        if danger_alerts and not turn_result.should_save:
-            effective_status = "ESCALATED"
-        self.status = effective_status
-
-        # 4. Commit to SQLite & Auto-Schedule Follow-Up ONLY on Confirmed Save
-        if turn_result.should_save:
-            visit_payload = VisitRecordCreate(
-                beneficiary_id=self.draft.beneficiary_id or "BEN-WALKIN",
-                beneficiary_name=self.draft.beneficiary_name or "Unknown Beneficiary",
-                visit_type=self.draft.visit_type or "ANC",
-                weight_kg=self.draft.weight_kg,
-                vaccinations_due=list(self.draft.vaccinations_due),
-                next_visit_date=self.draft.next_visit_date,
-                ifa_tablets_given=self.draft.ifa_tablets_given,
-                has_danger_sign=bool(self.draft.danger_signs),
-                danger_signs=list(self.draft.danger_signs),
-                notes=self.draft.notes,
-                raw_transcript=" | ".join(self._turn_transcripts),
-                language_code=active_lang if active_lang in (
-                    "hi-IN", "kn-IN", "ta-IN", "te-IN", "en-IN", "indic-auto"
-                ) else "hi-IN",
-            )
-            saved_visit = await self.db.create_visit(visit_payload)
-            baseline_fields = (self.patient_context or {}).get("baseline_fields")
-            saved_follow_up = await self.db.create_follow_up(
-                build_follow_up_create(saved_visit, baseline_fields=baseline_fields)
-            )
-            await self._send_json(
-                WsVisitSavedEvent(visit=saved_visit, follow_up=saved_follow_up).model_dump()
-            )
-            # Emit final SAVED form state before clearing draft + baseline context for next house
-            await self._send_json(
-                WsFormUpdateEvent(
-                    status="SAVED",
-                    record=self.draft,
-                    spoken_reply=safe_reply,
-                ).model_dump()
-            )
-            self.draft = VisitDraft()
-            self.patient_context = None
-            self.readback_completed = False
-            self._turn_transcripts.clear()
-        else:
-            diffs = turn_result.extraction.field_diffs
-            await self._send_json(
-                WsFormUpdateEvent(
-                    status=effective_status,
-                    record=self.draft,
-                    field_diff=diffs[0] if diffs else None,
-                    field_diffs=diffs,
-                    spoken_reply=safe_reply,
-                ).model_dump()
-            )
-
-        # 5. Stream Synthesized 16kHz PCM Audio via Gnani Timbre v3.0 (Cancellable on Barge-In)
-        await self._stream_tts_reply(
-            safe_reply=safe_reply,
-            active_lang=active_lang,
-            effective_status=effective_status,
-            turn_start=turn_start,
-            asr_latency_ms=event.latency_ms,
-            llm_latency_ms=llm_latency_ms,
-        )
+        finally:
+            if fast_tts_task is not None and not fast_tts_task.done():
+                fast_tts_task.cancel()
+                try:
+                    await fast_tts_task
+                except (asyncio.CancelledError, Exception):
+                    pass
 
     async def _stt_listener_loop(self) -> None:
         """Consume partial and final STT transcripts concurrently."""

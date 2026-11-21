@@ -602,6 +602,8 @@ def build_localized_readback(
 class LLMProvider(ABC):
     """Abstract interface for clinical structured visit extraction."""
 
+    last_used_model: str = "rule_based_offline"
+
     @abstractmethod
     async def extract(
         self,
@@ -616,6 +618,8 @@ class LLMProvider(ABC):
 
 class RuleBasedVisitExtractor(LLMProvider):
     """Deterministic code-mix extractor used offline, in tests, and as zero-downtime fallback."""
+
+    last_used_model: str = "rule_based_offline"
 
     async def extract(
         self,
@@ -774,6 +778,9 @@ def _sanitize_visit_payload(data: dict[str, Any]) -> dict[str, Any]:
     return cleaned
 
 
+GROQ_BACKUP_MODEL = "openai/gpt-oss-20b"
+
+
 def _groq_reasoning_extra(model: str) -> dict[str, Any]:
     """Disable/minimize reasoning tokens on Groq models for sub-second voice latency."""
     low = model.lower()
@@ -803,6 +810,7 @@ class GroqVisitExtractor(LLMProvider):
         self.timeout_s = timeout_s
         self.fallback = fallback or RuleBasedVisitExtractor()
         self._client: Optional[httpx.AsyncClient] = http_client
+        self.last_used_model: str = self.model if is_live_api_key(self.api_key) else "rule_based_offline"
 
     def _get_client(self) -> Optional[httpx.AsyncClient]:
         if self._client is None and is_live_api_key(self.api_key):
@@ -826,6 +834,7 @@ class GroqVisitExtractor(LLMProvider):
     ) -> GeminiExtractionPayload:
         client = self._get_client()
         if client is None:
+            self.last_used_model = "rule_based_offline"
             return await self.fallback.extract(
                 utterance=utterance,
                 current_draft=current_draft,
@@ -857,8 +866,8 @@ class GroqVisitExtractor(LLMProvider):
         )
 
         candidate_models = [self.model]
-        if self.model != "openai/gpt-oss-20b":
-            candidate_models.append("openai/gpt-oss-20b")
+        if self.model != GROQ_BACKUP_MODEL:
+            candidate_models.append(GROQ_BACKUP_MODEL)
 
         for idx, model_name in enumerate(candidate_models):
             body: dict[str, Any] = {
@@ -888,6 +897,7 @@ class GroqVisitExtractor(LLMProvider):
                 if content:
                     parsed = json.loads(_strip_json_fences(content))
                     if isinstance(parsed, dict):
+                        self.last_used_model = model_name
                         return GeminiExtractionPayload.model_validate(_sanitize_visit_payload(parsed))
             except Exception as exc:  # pragma: no cover - network/API failure fallback
                 if idx + 1 < len(candidate_models):
@@ -895,6 +905,7 @@ class GroqVisitExtractor(LLMProvider):
                     continue
                 logger.warning("Groq extraction failed (%s); falling back to RuleBasedVisitExtractor.", exc)
 
+        self.last_used_model = "rule_based_fallback"
         return await self.fallback.extract(
             utterance=utterance,
             current_draft=current_draft,
@@ -951,6 +962,7 @@ class GeminiVisitExtractor(LLMProvider):
         self.model = model or settings.gemini_model
         self.fallback = fallback or RuleBasedVisitExtractor()
         self._client: Any = None
+        self.last_used_model: str = self.model if is_live_gemini_key(self.api_key) else "rule_based_offline"
 
     def _get_client(self) -> Any:
         if self._client is None and is_live_gemini_key(self.api_key):
@@ -1014,14 +1026,17 @@ class GeminiVisitExtractor(LLMProvider):
                 ),
             )
             if response.parsed is not None:
+                self.last_used_model = self.model
                 if isinstance(response.parsed, GeminiExtractionPayload):
                     return response.parsed
                 return GeminiExtractionPayload.model_validate(response.parsed)
             if response.text:
+                self.last_used_model = self.model
                 return GeminiExtractionPayload.model_validate_json(response.text)
         except Exception as exc:  # pragma: no cover - network/API failure fallback
             logger.warning("Gemini extraction failed (%s); falling back to RuleBasedVisitExtractor.", exc)
 
+        self.last_used_model = "rule_based_fallback"
         return await self.fallback.extract(
             utterance=utterance,
             current_draft=current_draft,
@@ -1499,6 +1514,7 @@ class RegisterIntakeEngine:
         self.timeout_s = timeout_s
         self._client: Any = None
         self._groq_client: Optional[httpx.AsyncClient] = http_client
+        self.last_used_model: str = "rule_based_offline"
 
     def _get_client(self) -> Any:
         if self._client is None and is_live_api_key(self.api_key):
@@ -1544,30 +1560,54 @@ class RegisterIntakeEngine:
             },
             ensure_ascii=False,
         )
-        body: dict[str, Any] = {
-            "model": self.groq_model,
-            "messages": [
-                {"role": "system", "content": GROQ_REGISTER_INTAKE_SYSTEM_INSTRUCTION},
-                {"role": "user", "content": prompt},
-            ],
-            "temperature": 0.1,
-            "max_tokens": 350,
-            "response_format": {"type": "json_object"},
-            **_groq_reasoning_extra(self.groq_model),
-        }
-        try:
-            response = await client.post("/chat/completions", json=body)
-            response.raise_for_status()
-            data = response.json()
-            content = data["choices"][0]["message"]["content"]
-            if content:
-                parsed = json.loads(_strip_json_fences(content))
-                if isinstance(parsed, dict):
-                    return GeminiRegisterIntakePayload.model_validate(
-                        _sanitize_register_intake_payload(parsed)
+
+        candidate_models = [self.groq_model]
+        if self.groq_model != GROQ_BACKUP_MODEL:
+            candidate_models.append(GROQ_BACKUP_MODEL)
+
+        for idx, model_name in enumerate(candidate_models):
+            body: dict[str, Any] = {
+                "model": model_name,
+                "messages": [
+                    {"role": "system", "content": GROQ_REGISTER_INTAKE_SYSTEM_INSTRUCTION},
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": 0.1,
+                "max_tokens": 350,
+                "response_format": {"type": "json_object"},
+                **_groq_reasoning_extra(model_name),
+            }
+            try:
+                response = await client.post("/chat/completions", json=body)
+                if response.status_code in (429, 503) and idx + 1 < len(candidate_models):
+                    logger.warning(
+                        "Groq register intake model %s returned HTTP %s; retrying on backup model %s.",
+                        model_name,
+                        response.status_code,
+                        candidate_models[idx + 1],
                     )
-        except Exception as exc:  # pragma: no cover
-            logger.warning("Groq register intake failed (%s); falling back offline.", exc)
+                    continue
+                response.raise_for_status()
+                data = response.json()
+                content = data["choices"][0]["message"]["content"]
+                if content:
+                    parsed = json.loads(_strip_json_fences(content))
+                    if isinstance(parsed, dict):
+                        self.last_used_model = model_name
+                        return GeminiRegisterIntakePayload.model_validate(
+                            _sanitize_register_intake_payload(parsed)
+                        )
+            except Exception as exc:  # pragma: no cover
+                if idx + 1 < len(candidate_models):
+                    logger.warning(
+                        "Groq register intake model %s failed (%s); trying backup model.",
+                        model_name,
+                        exc,
+                    )
+                    continue
+                logger.warning("Groq register intake failed (%s); falling back offline.", exc)
+
+        self.last_used_model = "rule_based_fallback"
         return None
 
     async def _extract_with_llm(
@@ -1585,6 +1625,7 @@ class RegisterIntakeEngine:
             return await self._extract_with_groq(utterance, register, current_draft, language_code)
         if is_live_api_key(self.api_key):
             return await self._extract_with_gemini(utterance, register, current_draft, language_code)
+        self.last_used_model = "rule_based_offline"
         return None
 
     async def _extract_with_gemini(
@@ -1627,13 +1668,16 @@ class RegisterIntakeEngine:
                 ),
             )
             if response.parsed is not None:
+                self.last_used_model = self.model
                 if isinstance(response.parsed, GeminiRegisterIntakePayload):
                     return response.parsed
                 return GeminiRegisterIntakePayload.model_validate(response.parsed)
             if response.text:
+                self.last_used_model = self.model
                 return GeminiRegisterIntakePayload.model_validate_json(response.text)
         except Exception as exc:  # pragma: no cover
             logger.warning("Gemini register intake failed (%s); falling back offline.", exc)
+        self.last_used_model = "rule_based_fallback"
         return None
 
     async def process_turn(

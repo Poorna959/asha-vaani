@@ -439,3 +439,142 @@ def test_fr72_custom_register_voice_intake_correction_save_and_safety_over_ws():
         assert search_res[0]["field_answers"]["Age"] == 28
         csv_text = client.get(f"/api/registers/{reg_id}/export", params={"format": "csv"}).content.decode("utf-8-sig")
         assert "Savitha Rao" in csv_text and "O+" in csv_text
+
+
+def test_p301_parallel_danger_sign_tts_fast_path_beats_slow_llm():
+    """Verify P3-01: Layer-1 danger sign streams TTS in parallel without waiting for slow LLM."""
+    import asyncio
+
+    class SlowVisitExtractor(RuleBasedVisitExtractor):
+        last_used_model = "qwen/qwen3.8-27b-simulated"
+
+        def __init__(self, delay_s: float = 0.35) -> None:
+            self.delay_s = delay_s
+
+        async def extract(self, *args, **kwargs):
+            await asyncio.sleep(self.delay_s)
+            return await super().extract(*args, **kwargs)
+
+    cfg = Settings(mock_gnani=True, gemini_api_key="", groq_api_key="", vad_silence_tail_ms=100)
+    app = create_app(
+        settings=cfg,
+        db_path=":memory:",
+        stt_factory=lambda: MockPrismaSTTClient(partial_delay_s=0.0),
+        tts_factory=lambda: MockTimbreTTSClient(chunk_delay_s=0.0, max_chunks_per_sentence=2),
+        clinical_engine=ClinicalStateEngine(provider=SlowVisitExtractor(delay_s=0.35)),
+    )
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/session") as ws:
+            ws.send_json({"type": "session_start", "language_code": "hi-IN"})
+            ws.send_json(
+                {
+                    "type": "text_turn",
+                    "text": "Sunita Devi ANC checkup, heavy vaginal bleeding",
+                }
+            )
+
+            ordered_kinds: list[str] = []
+            events: list[dict] = []
+            audio_chunks: list[bytes] = []
+            got_form = False
+
+            for _ in range(80):
+                pkt = ws.receive()
+                if pkt.get("text") is not None:
+                    data = json.loads(pkt["text"])
+                    events.append(data)
+                    ordered_kinds.append(data["type"])
+                    if data.get("type") == "form_update":
+                        got_form = True
+                elif pkt.get("bytes") is not None:
+                    audio_chunks.append(pkt["bytes"])
+                    ordered_kinds.append("pcm_audio")
+                if got_form and len(audio_chunks) >= 2:
+                    break
+
+            assert "danger_escalation" in ordered_kinds
+            assert "metrics" in ordered_kinds
+            assert "pcm_audio" in ordered_kinds
+            assert "form_update" in ordered_kinds
+
+            # Critical P3-01 proof: first PCM audio & metrics MUST arrive BEFORE the 350ms LLM form_update!
+            assert ordered_kinds.index("danger_escalation") < ordered_kinds.index("pcm_audio")
+            assert ordered_kinds.index("pcm_audio") < ordered_kinds.index("form_update")
+
+            metrics = next(e for e in events if e["type"] == "metrics")
+            assert metrics["danger_fast_path"] is True
+            assert metrics["llm_latency_ms"] == 0.0
+            assert metrics["ttfa_ms"] < 200.0
+            assert metrics["stt_latency_ms"] == metrics["asr_latency_ms"]
+            assert metrics["tts_ttfa_ms"] == metrics["tts_latency_ms"]
+            assert metrics["active_llm_model"] == "qwen/qwen3.8-27b-simulated"
+
+            form = next(e for e in events if e["type"] == "form_update")
+            assert form["status"] == "ESCALATED"
+            assert form["record"]["beneficiary_id"] == "BEN-001"
+            assert "DS_MAT_BLEEDING" in form["record"]["danger_signs"]
+
+
+def test_p301_granular_telemetry_and_fast_path_barge_in_cutoff():
+    """Verify P3-01: fast-path TTS cancels cleanly on barge-in and reports barge_in_cutoff_ms & noise_floor_rms."""
+    import asyncio
+
+    class SlowVisitExtractor(RuleBasedVisitExtractor):
+        last_used_model = "rule_based_slow_test"
+
+        async def extract(self, *args, **kwargs):
+            await asyncio.sleep(0.4)
+            return await super().extract(*args, **kwargs)
+
+    cfg = Settings(mock_gnani=True, gemini_api_key="", groq_api_key="", vad_silence_tail_ms=100)
+    app = create_app(
+        settings=cfg,
+        db_path=":memory:",
+        stt_factory=lambda: MockPrismaSTTClient(partial_delay_s=0.0),
+        tts_factory=lambda: MockTimbreTTSClient(chunk_delay_s=0.04, max_chunks_per_sentence=30),
+        clinical_engine=ClinicalStateEngine(provider=SlowVisitExtractor()),
+    )
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/session") as ws:
+            ws.send_json({"type": "session_start", "language_code": "en-IN"})
+            # Feed a few ambient noise frames so adaptive VAD noise_floor_rms is active
+            noise_frame = _make_pcm_frame(amplitude=0.004, duration_ms=20)
+            for _ in range(5):
+                ws.send_bytes(noise_frame)
+
+            # Trigger danger-sign fast-path while slow LLM is still running
+            ws.send_json({"type": "text_turn", "text": "Newborn high fever and convulsions"})
+            while True:
+                pkt = ws.receive()
+                if pkt.get("bytes") is not None:
+                    break
+
+            # Barge-in mid-fast-path TTS while LLM is ALSO still running
+            barge_start = time.perf_counter()
+            speech_frame = _make_pcm_frame(amplitude=0.45, duration_ms=20)
+            for _ in range(5):
+                ws.send_bytes(speech_frame)
+
+            got_clear = False
+            for _ in range(30):
+                pkt = ws.receive()
+                if pkt.get("text") is not None:
+                    data = json.loads(pkt["text"])
+                    if data.get("type") == "barge_in_clear":
+                        got_clear = True
+                        break
+            assert got_clear is True
+            assert (time.perf_counter() - barge_start) * 1000.0 < 150.0
+
+            # Follow-up normal turn emits granular telemetry including barge_in_cutoff_ms & noise_floor_rms
+            ws.send_json({"type": "text_turn", "text": "Sunita Devi ANC checkup weight 54 kilo"})
+            events2, _ = _receive_turn_packets(ws, min_pcm_chunks=1)
+            metrics2 = next(e for e in events2 if e["type"] == "metrics")
+            assert metrics2["danger_fast_path"] is False
+            assert metrics2["llm_latency_ms"] >= 350.0
+            assert metrics2["barge_in_cutoff_ms"] is not None
+            assert 0.0 <= metrics2["barge_in_cutoff_ms"] < 150.0
+            assert metrics2["noise_floor_rms"] > 0.0
+            assert metrics2["active_llm_model"] == "rule_based_slow_test"

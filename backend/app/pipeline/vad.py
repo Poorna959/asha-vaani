@@ -74,6 +74,11 @@ class AdaptiveEndpointVAD:
             logger.warning("Could not load Silero ONNX (%s); using adaptive SNR VAD.", exc)
             self._onnx_session = None
 
+    @property
+    def noise_floor_rms(self) -> float:
+        """Return current learned ambient noise floor RMS in [0, 1] scale."""
+        return round(float(self._noise_floor), 5)
+
     def reset(self) -> None:
         """Reset turn speech/silence accumulators while keeping learned noise floor."""
         self._in_speech = False
