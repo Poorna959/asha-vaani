@@ -87,7 +87,7 @@ erDiagram
 * Synthesizes and streams audio sentence-by-sentence for minimal latency.
 * Instant audio cancellation on interruption.
 
-### FR-4: Clinical Data Extraction & Voice Correction (Gemini 2.5 Flash)
+### FR-4: Clinical Data Extraction & Voice Correction (Groq)
 * Extracts structured visit data and handles Indic transliteration and numbers (*"do point aath kilo"* -> `2.8`).
 * Generates field diffs for voice corrections (*"No, weight is 2.8 kilo"*).
 * Enforces read-back confirmation before committing visits.
