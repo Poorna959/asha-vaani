@@ -38,7 +38,7 @@ class DataLayerTest {
 
     @Test
     fun `server url resolver normalizes http, https, bare host, and ws urls`() {
-        assertEquals("http://127.0.0.1:8000", ServerUrlResolver.normalizeBaseUrl(""))
+        assertEquals(ServerUrlResolver.DEFAULT_BASE_URL, ServerUrlResolver.normalizeBaseUrl(""))
         assertEquals("http://127.0.0.1:8000", ServerUrlResolver.normalizeBaseUrl("http://127.0.0.1:8000/"))
         assertEquals("http://192.168.1.42:8000", ServerUrlResolver.normalizeBaseUrl("192.168.1.42:8000/"))
         assertEquals("https://demo.ashavaani.in", ServerUrlResolver.normalizeBaseUrl("wss://demo.ashavaani.in/ws/session"))

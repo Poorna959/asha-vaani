@@ -5,10 +5,10 @@ import java.nio.charset.StandardCharsets
 
 /**
  * Pure URL normalization and endpoint builder for ASHA Vaani FastAPI server.
- * Defaults to `http://127.0.0.1:8000` for zero-config USB `adb reverse tcp:8000 tcp:8000`.
+ * Defaults to the production Railway HTTPS/WSS backend for wireless Android usage.
  */
 object ServerUrlResolver {
-    const val DEFAULT_BASE_URL: String = "http://127.0.0.1:8000"
+    const val DEFAULT_BASE_URL: String = "https://asha-vaani-backend-production.up.railway.app"
     const val DEFAULT_PHC_PHONE: String = "108"
 
     fun normalizeBaseUrl(raw: String?): String {

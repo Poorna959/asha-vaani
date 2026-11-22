@@ -1,6 +1,7 @@
 package com.ashavaani.app.ui.walkmode
 
 import com.ashavaani.app.audio.AudioDspCapabilities
+import com.ashavaani.app.data.remote.ServerUrlResolver
 import com.ashavaani.app.model.ConnectionState
 import com.ashavaani.app.model.FieldDiff
 import com.ashavaani.app.model.PatientFollowUpContext
@@ -63,7 +64,7 @@ data class WalkModeUiState(
     val isSimDrawerOpen: Boolean = false,
     val toastMessage: String? = null,
     val errorBanner: String? = null,
-    val backendUrl: String = "http://127.0.0.1:8000",
+    val backendUrl: String = ServerUrlResolver.DEFAULT_BASE_URL,
     val phcPhoneNumber: String = "108",
 )
 

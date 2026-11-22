@@ -11,7 +11,6 @@ import {
   type GuideLanguage,
 } from "../content/installGuide";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
-import { useAuth } from "../hooks/useAuth";
 import { useRelease } from "../hooks/useRelease";
 import { currentPlatform, type Platform } from "../lib/device";
 import {
@@ -54,7 +53,6 @@ export function DownloadPage() {
   );
 
   const { state, retry } = useRelease();
-  const { session } = useAuth();
   const platform = useMemo<Platform>(() => currentPlatform(), []);
   const initialLang = useMemo<GuideLanguage>(() => {
     if (typeof navigator === "undefined") return DEFAULT_GUIDE_LANGUAGE;
@@ -75,32 +73,6 @@ export function DownloadPage() {
             Official Android package distribution with cryptographic SHA-256 verification and multilingual installation
             instructions for ASHA workers and PHC supervisors.
           </p>
-        </div>
-
-        {/* Supabase Auth Status Banner */}
-        <div className="alert alert--info" role="status">
-          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "0.75rem", width: "100%" }}>
-            {session ? (
-              <div>
-                <strong>Signed in as {session.displayName} ({session.email})</strong>
-                <p style={{ margin: 0 }}>
-                  Authenticated via {session.provider === "google" ? "Gmail / Google" : "Supabase Email"} — verified APK download ready below.
-                </p>
-              </div>
-            ) : (
-              <>
-                <div>
-                  <strong>ASHA Worker &amp; PHC Supervisor Account</strong>
-                  <p style={{ margin: 0 }}>
-                    Sign in with your Gmail or Email via Supabase to link your device profile, or download the APK directly below.
-                  </p>
-                </div>
-                <Link to="/login" className="btn btn--sm">
-                  Sign in with Gmail / Email
-                </Link>
-              </>
-            )}
-          </div>
         </div>
 
         {/* Platform notice banner */}

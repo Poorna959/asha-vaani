@@ -4,7 +4,6 @@ import { MemoryRouter } from "react-router";
 import { describe, expect, it, vi } from "vitest";
 import { AppRoutes } from "./App";
 import { DANGER_SIGN_COUNT, DANGER_SIGN_GROUPS } from "./content/dangerSigns";
-import { AuthProvider } from "./hooks/useAuth";
 import { ReleaseProvider } from "./hooks/useRelease";
 
 const COMING_SOON_MANIFEST = {
@@ -53,13 +52,11 @@ function mockFetchJson(payload: unknown, status = 200) {
 function renderAt(route = "/") {
   window.localStorage.clear();
   return render(
-    <AuthProvider>
-      <ReleaseProvider>
-        <MemoryRouter initialEntries={[route]}>
-          <AppRoutes />
-        </MemoryRouter>
-      </ReleaseProvider>
-    </AuthProvider>,
+    <ReleaseProvider>
+      <MemoryRouter initialEntries={[route]}>
+        <AppRoutes />
+      </MemoryRouter>
+    </ReleaseProvider>,
   );
 }
 
@@ -199,22 +196,5 @@ describe("PrivacyPage & NotFoundPage", () => {
     mockFetchJson(COMING_SOON_MANIFEST);
     renderAt("/unknown-path");
     expect(screen.getByRole("heading", { name: /This page does not exist/i })).toBeInTheDocument();
-  });
-});
-
-describe("LoginPage — Supabase Gmail & Email Authentication", () => {
-  it("allows 1-tap Gmail sign-in and transitions to the verified APK download page", async () => {
-    mockFetchJson(PUBLISHED_MANIFEST);
-    const user = userEvent.setup();
-    renderAt("/login");
-
-    expect(screen.getByRole("heading", { name: /Sign in to download & sync ASHA Vaani/i })).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: /Continue with Gmail \/ Google/i }));
-    await user.click(screen.getByRole("button", { name: /Sunita Devi \(ASHA Worker\)/i }));
-
-    await waitFor(() => {
-      expect(screen.getByText(/Signed in as Sunita Devi \(ASHA Worker\) \(asha\.sunita@gmail\.com\)/i)).toBeInTheDocument();
-    });
   });
 });

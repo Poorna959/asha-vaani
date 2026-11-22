@@ -7,17 +7,17 @@
     "minAndroidVersion": "8.0"
   },
   "latest": {
-    "versionName": "0.3.0",
-    "versionCode": 2,
-    "releasedAt": "2026-11-21T23:26:19.000Z",
-    "file": "downloads/asha-vaani-v0.3.0.apk",
-    "sizeBytes": 18161734,
-    "sha256": "4ba990d5612e853644ad6e51700f66726499926e770cadaa6753c273e85b58b2",
+    "versionName": "0.4.0",
+    "versionCode": 3,
+    "releasedAt": "2026-11-22T00:18:30.000Z",
+    "file": "downloads/asha-vaani-v0.4.0.apk",
+    "sizeBytes": 18079618,
+    "sha256": "754a94a46248046d23535797446803be46e13f4950955a606dbff43aafd7e5c4",
     "notes": [
-      "Supabase Gmail & Email Authentication (Login Screen + OAuth deep-link + Offline Field ASHA quick access)",
+      "Zero-login instant launch straight into Walk Mode for hands-free field visits",
+      "Connected by default to the live cloud Railway HTTPS/WSS backend (wireless, no USB cable needed)",
       "Gnani Prisma v3.0 anti-buffering digital zero-PCM VAD flush & live in-place language switching",
-      "Loudspeaker outdoor gain (1.85x) with AcousticEchoGate & live LISTENING/CAPTURING indicators",
-      "Phonetic duplicate patient upsert (Savitha Rao == Savita Rao) & Room v2 FIFO offline outbox"
+      "Loudspeaker outdoor gain (1.85x) with AcousticEchoGate & phonetic duplicate patient upsert"
     ]
   },
   "history": []

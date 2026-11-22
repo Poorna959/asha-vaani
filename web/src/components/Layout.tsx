@@ -1,6 +1,5 @@
 import { useEffect, useId, useState } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router";
-import { useAuth } from "../hooks/useAuth";
 import { LogoMark } from "./Logo";
 import styles from "./Layout.module.css";
 
@@ -36,7 +35,6 @@ export function Header() {
   const [open, setOpen] = useState(false);
   const menuId = useId();
   const location = useLocation();
-  const { session, signOut } = useAuth();
 
   useEffect(() => setOpen(false), [location.pathname, location.hash]);
 
@@ -70,20 +68,6 @@ export function Header() {
         </nav>
 
         <div className={styles.headerActions}>
-          {session ? (
-            <div className={styles.authHeaderGroup}>
-              <Link to="/login" className="pill pill--teal" title={session.email}>
-                {session.displayName}
-              </Link>
-              <button type="button" className="btn btn--sm" onClick={signOut}>
-                Sign out
-              </button>
-            </div>
-          ) : (
-            <NavLink to="/login" className="btn btn--sm">
-              Sign in
-            </NavLink>
-          )}
           <NavLink to="/download" className={`btn btn--primary btn--sm ${styles.headerCta}`}>
             <DownloadIcon /> Download
           </NavLink>
@@ -107,9 +91,6 @@ export function Header() {
               <Link to={item.to}>{item.label}</Link>
             </li>
           ))}
-          <li>
-            <Link to="/login">{session ? `Account (${session.displayName})` : "Sign in (Gmail / Email)"}</Link>
-          </li>
           <li>
             <Link to="/download" className="btn btn--primary">
               <DownloadIcon /> Download for Android

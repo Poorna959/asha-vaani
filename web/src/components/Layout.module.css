@@ -87,12 +87,6 @@
   gap: 0.5rem;
 }
 
-.authHeaderGroup {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
-}
-
 .headerCta {
   min-height: 44px;
 }

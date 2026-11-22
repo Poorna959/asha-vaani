@@ -46,7 +46,6 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.ashavaani.app.AppContainer
 import com.ashavaani.app.model.ConnectionState
-import com.ashavaani.app.ui.auth.LoginScreen
 import com.ashavaani.app.ui.components.TelemetryStatusPill
 import com.ashavaani.app.ui.history.FollowUpScreen
 import com.ashavaani.app.ui.history.HistoryViewModel
@@ -72,18 +71,6 @@ import com.ashavaani.app.ui.walkmode.WalkModeViewModel
 fun AshaVaaniAppShell(
     container: AppContainer,
 ) {
-    val authSession by container.settingsStore.authSession.collectAsStateWithLifecycle()
-
-    if (authSession == null) {
-        LoginScreen(
-            supabaseAuth = container.supabaseAuth,
-            onAuthenticated = { session ->
-                container.settingsStore.saveAuthSession(session)
-            },
-        )
-        return
-    }
-
     val walkModeViewModel: WalkModeViewModel = viewModel(
         factory = WalkModeViewModel.factory(container),
     )
@@ -335,11 +322,6 @@ fun AshaVaaniAppShell(
     if (showSettingsSheet) {
         SettingsSheet(
             uiState = walkUiState,
-            authSession = authSession,
-            onSignOut = {
-                showSettingsSheet = false
-                container.settingsStore.clearAuthSession()
-            },
             onSaveAndReconnect = walkModeViewModel::saveSettingsAndReconnect,
             onSyncOutboxNow = walkModeViewModel::syncPendingOutboxNow,
             onDismiss = { showSettingsSheet = false },
